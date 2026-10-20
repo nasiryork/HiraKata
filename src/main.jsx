@@ -5,12 +5,12 @@ import './index.css'
 
 // The API is guarded by a shared secret (functions/api/_middleware.js). Open the app once with
 // `#key=<secret>` on the end of the URL; it is saved on this device and added to every /api call.
-// The URL fragment is never sent to the server.
+// The URL fragment is never sent to the server. It stays in the address bar on purpose, so a
+// home-screen shortcut saved from that URL carries the key (iOS keeps shortcut storage separate).
 const KEY_NAME = 'hirakata_key'
 const fromHash = new URLSearchParams(location.hash.slice(1)).get('key')
 if (fromHash) {
   try { localStorage.setItem(KEY_NAME, fromHash) } catch {}
-  history.replaceState(null, '', location.pathname + location.search)
 }
 const nativeFetch = window.fetch.bind(window)
 window.fetch = (input, init = {}) => {

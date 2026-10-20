@@ -32,7 +32,7 @@ Every `/api` route (progress, answers, export) checks a shared secret in the `x-
 npx wrangler pages secret put API_SECRET --project-name hirakata
 ```
 
-2. Open the app once on each device with `#key=<your secret>` on the end of the URL. The app saves it on that device, removes it from the address bar, and sends it with every request. The fragment never goes to the server.
+2. Open the app once on each device with `#key=<your secret>` on the end of the URL. The app saves it on that device and sends it with every request. The fragment never goes to the server. On iPhone, add to Home Screen from that same URL (key included), since a home-screen app keeps its own storage.
 3. Anything else that reads the API (for example the weekly export) sends the same value in the `x-hirakata-key` header.
 
 For local development, leave `API_SECRET` unset and the API stays open.
