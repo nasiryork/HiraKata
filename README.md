@@ -1,5 +1,9 @@
 # HiraKata
 
+<p align="center">
+  <img src="images/logo.png" alt="HiraKata logo, a deer in a graduation cap holding a sign" width="220">
+</p>
+
 A hiragana and katakana practice app I built with Claude Code while learning Japanese.
 
 <p align="center">
