@@ -2,6 +2,7 @@ import React, { useState, useRef, useMemo, useEffect } from 'react';
 import { PHRASES, FRAME_NOUNS } from './data/phrases.js';
 import { planFor } from './lib/plan.js';
 import { etDay } from './lib/et.js';
+import NextBar from './NextBar.jsx';
 
 const MAX_W = 8;
 const MIN_W = 0.3;
@@ -294,13 +295,8 @@ export default function Phrases({ log, showRomaji, setShowRomaji, suggestRomajiO
               >
                 {said ? `Said it out loud ✓ (${sayCount}×)` : 'Said it out loud'}
               </button>
-              <button
-                onClick={() => nextQuestion(current.id)}
-                className="min-h-[56px] py-3 bg-purple-600 text-white font-bold rounded-xl"
-              >
-                Next →
-              </button>
             </div>
+            <NextBar onNext={() => nextQuestion(current.id)} />
           </div>
         )}
       </div>

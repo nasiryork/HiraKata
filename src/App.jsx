@@ -1,6 +1,11 @@
 import React, { useState, useRef, useMemo, useEffect, useCallback } from 'react';
 import { hiragana, katakana } from './data/kana.js';
 import Phrases from './Phrases.jsx';
+import Words from './Words.jsx';
+import Stats from './Stats.jsx';
+import GateBar from './GateBar.jsx';
+import NextBar from './NextBar.jsx';
+import { PLAN } from './data/plan.js';
 import { useSessionLog } from './lib/useSessionLog.js';
 import { KANA_PRESETS, GATE, planFor, bannerText } from './lib/plan.js';
 import { etDay } from './lib/et.js';
@@ -71,33 +76,11 @@ const TabButton = ({ id, tab, setTab, children }) => (
   </button>
 );
 
-function GateBar({ label, g }) {
-  const accPct = g.accuracy == null ? 0 : g.accuracy / GATE.accuracy;
-  const speedPct = g.avg_ms == null ? 0 : Math.min(1, GATE.avgMs / g.avg_ms);
-  const progress = Math.round(Math.min(1, accPct, speedPct) * 100);
-  return (
-    <div className="mb-4 last:mb-0">
-      <div className="flex justify-between text-sm mb-1">
-        <span className="font-medium text-gray-800">{label}</span>
-        <span className="text-gray-600">
-          {g.accuracy == null
-            ? 'no answers yet'
-            : `${Math.round(g.accuracy * 100)}% / ${(g.avg_ms / 1000).toFixed(1)}s`}
-          {g.pass ? ' ✓' : ''}
-        </span>
-      </div>
-      <div className="h-3 bg-gray-200 rounded-full overflow-hidden">
-        <div className={`h-full ${g.pass ? 'bg-green-500' : 'bg-purple-500'}`} style={{ width: `${progress}%` }} />
-      </div>
-    </div>
-  );
-}
-
-function Home({ summary, offline, onStartKana, onStartPhrases, onSync, syncMsg, syncing }) {
+function Home({ summary, offline, onStartKana, onStartSecond, onSave, saving, lastSaved }) {
   const day = etDay();
   const { entry } = planFor(day);
   const banner = bannerText(entry);
-  const job = summary?.job ?? { kana: false, phrases: false, done: false };
+  const job = summary?.job ?? { kana: false, second: false, done: false };
   const streak = summary?.streak ?? 0;
   const check = (ok) => (
     <span className={`inline-flex w-7 h-7 rounded-full items-center justify-center text-sm shrink-0 ${ok ? 'bg-green-500 text-white' : 'bg-gray-200 text-gray-400'}`}>
@@ -131,9 +114,9 @@ function Home({ summary, offline, onStartKana, onStartPhrases, onSync, syncMsg, 
           {check(job.kana)}
           <span className="text-gray-800 font-medium">{banner.kana}</span>
         </button>
-        <button onClick={onStartPhrases} className="w-full flex items-center gap-3 text-left py-3">
-          {check(job.phrases)}
-          <span className="text-gray-800 font-medium">{banner.phrases}</span>
+        <button onClick={onStartSecond} className="w-full flex items-center gap-3 text-left py-3">
+          {check(job.second)}
+          <span className="text-gray-800 font-medium">{banner.second}</span>
         </button>
         {offline && <div className="text-sm text-gray-500 mt-2">Offline / dev mode: progress is not being saved.</div>}
       </div>
@@ -146,19 +129,13 @@ function Home({ summary, offline, onStartKana, onStartPhrases, onSync, syncMsg, 
         </div>
       )}
 
-      <div className="bg-white rounded-2xl shadow-xl p-6 text-center">
-        <button
-          onClick={onSync}
-          disabled={syncing}
-          className="w-full min-h-[56px] py-3 bg-purple-600 text-white font-bold rounded-xl disabled:opacity-60"
-        >
-          {syncing ? 'Syncing…' : 'Sync now'}
-        </button>
-        <div className="text-sm text-gray-500 mt-3">
-          {syncMsg ||
-            (summary?.last_sync ? `Last sync ${new Date(summary.last_sync).toLocaleString()}` : 'Progress saves automatically as you answer.')}
-        </div>
-      </div>
+      <button onClick={onSave} disabled={saving} className="w-full text-center text-sm text-gray-500 py-2">
+        {saving
+          ? 'Saving…'
+          : lastSaved
+            ? `Last saved ${lastSaved.toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit' })} ET · tap to save now`
+            : 'Saves automatically as you answer'}
+      </button>
     </div>
   );
 }
@@ -248,6 +225,7 @@ function Kana({ log, preset, setPreset }) {
     fetch('/api/stats', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      keepalive: true,
       body: JSON.stringify({
         script: current.script,
         char: current.char,
@@ -378,9 +356,7 @@ function Kana({ log, preset, setPreset }) {
         {result && (
           <div className="mt-6">
             {result === 'wrong' && <div className="text-red-600 font-medium mb-3">Correct answer: {current.romaji}</div>}
-            <button onClick={() => nextQuestion(current.char)} className="py-3 px-8 min-h-[56px] bg-purple-600 text-white font-bold rounded-lg">
-              Next →
-            </button>
+            <NextBar onNext={() => nextQuestion(current.char)} />
           </div>
         )}
       </div>
@@ -393,8 +369,8 @@ export default function App() {
   const [preset, setPreset] = useState('custom');
   const [summary, setSummary] = useState(null);
   const [offline, setOffline] = useState(false);
-  const [syncing, setSyncing] = useState(false);
-  const [syncMsg, setSyncMsg] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [lastSaved, setLastSaved] = useState(null);
   const [showRomaji, setShowRomajiState] = useState(() => {
     try {
       return localStorage.getItem(ROMAJI_KEY) !== '0';
@@ -403,7 +379,8 @@ export default function App() {
     }
   });
 
-  const log = useSessionLog();
+  // Every server-confirmed session save updates the "Last saved" line.
+  const log = useSessionLog((res) => res?.saved_at && setLastSaved(new Date(res.saved_at)));
 
   const loadSummary = useCallback(
     () =>
@@ -412,6 +389,7 @@ export default function App() {
         .then((data) => {
           setSummary(data);
           setOffline(false);
+          setLastSaved((prev) => prev ?? (data.last_sync ? new Date(data.last_sync) : null));
           return data;
         })
         .catch(() => {
@@ -445,41 +423,35 @@ export default function App() {
       .catch(() => {});
   }, []);
 
-  // Flush any open session whenever we land on Home, then refresh the progress summary.
+  // Landing on Home (or Stats) flushes any open session, then recomputes progress from the server,
+  // so today's job lines check off as they are met across separate sittings.
   useEffect(() => {
-    if (tab !== 'home') return;
-    log.flush().finally(loadSummary);
+    if (tab !== 'home' && tab !== 'stats') return;
+    const refresh = () => log.flush().finally(loadSummary);
+    refresh();
+    const onVisible = () => document.visibilityState === 'visible' && refresh();
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab]);
+
+  // Every screen change saves the open session first.
+  const go = (next) => {
+    log.flush();
+    setTab(next);
+  };
 
   const startKana = () => {
     const p = planFor(etDay()).entry.kana.preset;
     setPreset(KANA_PRESETS[p] ? p : 'custom');
-    setTab('kana');
+    go('kana');
   };
 
-  const sync = async () => {
-    setSyncing(true);
-    setSyncMsg('');
-    try {
-      await log.flush();
-      const res = await fetch('/api/sync', { method: 'POST' });
-      if (!res.ok) throw new Error('sync failed');
-      const data = await res.json();
-      setSummary(data);
-      const { text, ...raw } = data;
-      const block = `${text}\n\n\`\`\`json\n${JSON.stringify(raw)}\n\`\`\``;
-      try {
-        await navigator.clipboard.writeText(block);
-        setSyncMsg('Synced. Export copied to clipboard.');
-      } catch {
-        setSyncMsg('Synced. (Clipboard blocked; progress is already saved.)');
-      }
-    } catch {
-      setSyncMsg('Sync failed. Nothing is lost; try again.');
-    } finally {
-      setSyncing(false);
-    }
+  const saveNow = async () => {
+    setSaving(true);
+    await log.flush();
+    await loadSummary();
+    setSaving(false);
   };
 
   const streak = summary?.streak ?? 0;
@@ -498,9 +470,14 @@ export default function App() {
         </div>
 
         <div className="flex gap-2 mb-4">
-          <TabButton id="home" tab={tab} setTab={setTab}>Home</TabButton>
-          <TabButton id="kana" tab={tab} setTab={setTab}>Kana</TabButton>
-          <TabButton id="phrases" tab={tab} setTab={setTab}>Phrases</TabButton>
+          <TabButton id="home" tab={tab} setTab={go}>Home</TabButton>
+          <TabButton id="kana" tab={tab} setTab={go}>Kana</TabButton>
+          {PLAN.phrasesOn ? (
+            <TabButton id="phrases" tab={tab} setTab={go}>Phrases</TabButton>
+          ) : (
+            <TabButton id="words" tab={tab} setTab={go}>Words</TabButton>
+          )}
+          <TabButton id="stats" tab={tab} setTab={go}>Stats</TabButton>
         </div>
 
         {tab === 'home' && (
@@ -508,14 +485,23 @@ export default function App() {
             summary={summary}
             offline={offline}
             onStartKana={startKana}
-            onStartPhrases={() => setTab('phrases')}
-            onSync={sync}
-            syncMsg={syncMsg}
-            syncing={syncing}
+            onStartSecond={() => go(PLAN.phrasesOn ? 'phrases' : 'words')}
+            onSave={saveNow}
+            saving={saving}
+            lastSaved={lastSaved}
           />
         )}
         {tab === 'kana' && <Kana log={log} preset={preset} setPreset={setPreset} />}
-        {tab === 'phrases' && (
+        {tab === 'words' && !PLAN.phrasesOn && (
+          <Words
+            log={log}
+            showRomaji={showRomaji}
+            setShowRomaji={setShowRomaji}
+            suggestRomajiOff={suggestRomajiOff}
+          />
+        )}
+        {tab === 'stats' && <Stats summary={summary} />}
+        {tab === 'phrases' && PLAN.phrasesOn && (
           <Phrases
             log={log}
             showRomaji={showRomaji}
