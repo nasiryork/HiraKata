@@ -296,10 +296,10 @@ export default function Phrases({ log, showRomaji, setShowRomaji, suggestRomajiO
                 {said ? `Said it out loud ✓ (${sayCount}×)` : 'Said it out loud'}
               </button>
             </div>
-            <NextBar onNext={() => nextQuestion(current.id)} />
           </div>
         )}
       </div>
+      <NextBar enabled={!!picked} onNext={() => picked && nextQuestion(current.id)} />
     </div>
   );
 }

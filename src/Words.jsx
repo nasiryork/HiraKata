@@ -3,6 +3,9 @@ import { WORDS } from './data/words.js';
 import { WORDS_RULE as R } from './data/plan.js';
 import { poolWords, nextBatchAt, mergeWords } from './lib/words.js';
 import NextBar from './NextBar.jsx';
+import TodayTimer from './TodayTimer.jsx';
+import { planFor } from './lib/plan.js';
+import { etDay } from './lib/et.js';
 
 const MAX_W = 8;
 const START_AVG_MS = 4000;
@@ -50,7 +53,7 @@ const norm = (s) =>
     .replace(/ee/g, 'e')
     .replace(/ii/g, 'i');
 
-export default function Words({ log, showRomaji, setShowRomaji, suggestRomajiOff }) {
+export default function Words({ log, base, showRomaji, setShowRomaji, suggestRomajiOff }) {
   const [mode, setMode] = useState('jp-en');
   const [poolSize, setPoolSize] = useState(R.startPool);
   const [current, setCurrent] = useState(null);
@@ -70,6 +73,7 @@ export default function Words({ log, showRomaji, setShowRomaji, suggestRomajiOff
   const avgTime = useRef(START_AVG_MS);
   const questionStart = useRef(0);
   const loaded = useRef(false);
+  const feedbackRef = useRef(null);
 
   useEffect(() => {
     fetch('/api/words')
@@ -116,6 +120,10 @@ export default function Words({ log, showRomaji, setShowRomaji, suggestRomajiOff
     nextQuestion(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode, loadedTick]);
+
+  useEffect(() => {
+    if (picked) feedbackRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }, [picked]);
 
   const answer = (isCorrect, key) => {
     if (picked) return;
@@ -209,6 +217,7 @@ export default function Words({ log, showRomaji, setShowRomaji, suggestRomajiOff
       )}
 
       <div className="bg-white rounded-2xl shadow-xl p-6 text-center">
+        <TodayTimer log={log} type="words" base={base} goalMinutes={planFor(etDay()).entry.words?.minutes ?? 5} />
         <div className="flex justify-between text-sm text-gray-500 mb-3">
           <span>
             {stats.correct}/{stats.answered} correct
@@ -282,16 +291,16 @@ export default function Words({ log, showRomaji, setShowRomaji, suggestRomajiOff
 
         {picked && (
           <>
-            <div className="mt-4 bg-purple-50 rounded-xl p-4">
+            <div ref={feedbackRef} style={{ scrollMarginBottom: 110 }} className="mt-4 bg-purple-50 rounded-xl p-4">
               <div className="text-2xl font-bold text-gray-800">{current.jp}</div>
               {hasKanji && <div className="text-gray-700">{current.kana}</div>}
               <div className="text-gray-500">{current.romaji}</div>
               <div className="text-gray-700 mt-1">{current.en}</div>
             </div>
-            <NextBar onNext={() => nextQuestion(current.id)} />
           </>
         )}
       </div>
+      <NextBar enabled={!!picked} onNext={() => picked && nextQuestion(current.id)} />
     </div>
   );
 }

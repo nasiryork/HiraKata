@@ -5,9 +5,10 @@ import Words from './Words.jsx';
 import Stats from './Stats.jsx';
 import GateBar from './GateBar.jsx';
 import NextBar from './NextBar.jsx';
+import TodayTimer, { mmss } from './TodayTimer.jsx';
 import { PLAN } from './data/plan.js';
 import { useSessionLog } from './lib/useSessionLog.js';
-import { KANA_PRESETS, GATE, planFor, bannerText } from './lib/plan.js';
+import { KANA_PRESETS, GATE, planFor, bannerText, parseUntil } from './lib/plan.js';
 import { etDay } from './lib/et.js';
 
 const MAX_W = 8;
@@ -76,12 +77,26 @@ const TabButton = ({ id, tab, setTab, children }) => (
   </button>
 );
 
-function Home({ summary, offline, onStartKana, onStartSecond, onSave, saving, lastSaved }) {
+function Bar({ frac, done }) {
+  return (
+    <div className="h-3 bg-gray-200 rounded-full overflow-hidden">
+      <div className={`h-full ${done ? 'bg-green-500' : 'bg-purple-500'}`} style={{ width: `${Math.round(Math.min(1, frac) * 100)}%` }} />
+    </div>
+  );
+}
+
+function Home({ summary, offline, loadError, saveError, onStartKana, onStartSecond, onSave, saving, lastSaved }) {
   const day = etDay();
   const { entry } = planFor(day);
   const banner = bannerText(entry);
   const job = summary?.job ?? { kana: false, second: false, done: false };
   const streak = summary?.streak ?? 0;
+  const today = summary?.today ?? { kana: { seconds: 0, questions: 0, correct: 0 }, words: { seconds: 0 }, phrases: { seconds: 0 } };
+  const u = parseUntil(entry.kana.until);
+  const k = today.kana;
+  const kAcc = k.questions ? k.correct / k.questions : 0;
+  const secondType = PLAN.phrasesOn ? 'phrases' : 'words';
+  const secondMin = (PLAN.phrasesOn ? entry.phrases?.minutes : entry.words?.minutes) ?? 5;
   const check = (ok) => (
     <span className={`inline-flex w-7 h-7 rounded-full items-center justify-center text-sm shrink-0 ${ok ? 'bg-green-500 text-white' : 'bg-gray-200 text-gray-400'}`}>
       {ok ? '✓' : ''}
@@ -110,15 +125,31 @@ function Home({ summary, offline, onStartKana, onStartSecond, onSave, saving, la
         <div className="text-sm text-gray-500 mb-3">
           Today{job.done ? ' · done 🎉' : ''}
         </div>
-        <button onClick={onStartKana} className="w-full flex items-center gap-3 text-left py-3">
-          {check(job.kana)}
-          <span className="text-gray-800 font-medium">{banner.kana}</span>
+        <button onClick={onStartKana} className="w-full text-left py-3">
+          <span className="flex items-center gap-3">
+            {check(job.kana)}
+            <span className="text-gray-800 font-medium">{banner.kana}</span>
+          </span>
+          <span className="block mt-2"><Bar frac={k.seconds / (entry.kana.minutes * 60)} done={job.kana} /></span>
+          <span className="block text-sm text-gray-500 mt-1">
+            {mmss(k.seconds)} / {mmss(entry.kana.minutes * 60)} min
+            {' · or '}{k.questions}/{u.questions} questions at {k.questions ? Math.round(kAcc * 100) : 0}% (need {u.pct}%)
+          </span>
         </button>
-        <button onClick={onStartSecond} className="w-full flex items-center gap-3 text-left py-3">
-          {check(job.second)}
-          <span className="text-gray-800 font-medium">{banner.second}</span>
+        <button onClick={onStartSecond} className="w-full text-left py-3">
+          <span className="flex items-center gap-3">
+            {check(job.second)}
+            <span className="text-gray-800 font-medium">{banner.second}</span>
+          </span>
+          <span className="block mt-2"><Bar frac={today[secondType].seconds / (secondMin * 60)} done={job.second} /></span>
+          <span className="block text-sm text-gray-500 mt-1">{mmss(today[secondType].seconds)} / {mmss(secondMin * 60)} min</span>
         </button>
-        {offline && <div className="text-sm text-gray-500 mt-2">Offline / dev mode: progress is not being saved.</div>}
+        {offline && (
+          <div className="text-sm text-red-600 mt-2">
+            Couldn’t load progress{loadError ? ` (error ${loadError})` : ''}, so these bars may be out of date.
+          </div>
+        )}
+        {saveError && <div className="text-sm text-red-600 mt-2">Last save failed (error {saveError}). It will retry.</div>}
       </div>
 
       {summary && (
@@ -140,7 +171,7 @@ function Home({ summary, offline, onStartKana, onStartSecond, onSave, saving, la
   );
 }
 
-function Kana({ log, preset, setPreset }) {
+function Kana({ log, base, preset, setPreset }) {
   const [script, setScript] = useState('hiragana');
   const [category, setCategory] = useState('basic');
   const [mode, setMode] = useState('choice'); // 'choice' | 'typed'
@@ -305,6 +336,7 @@ function Kana({ log, preset, setPreset }) {
       </div>
 
       <div className="bg-white rounded-2xl shadow-xl p-8 text-center">
+        <TodayTimer log={log} type="kana" base={base} goalMinutes={planFor(etDay()).entry.kana.minutes} />
         <div className="text-sm text-gray-500 mb-2">
           {stats.correct}/{stats.answered} correct · streak {stats.streak}
         </div>
@@ -356,10 +388,10 @@ function Kana({ log, preset, setPreset }) {
         {result && (
           <div className="mt-6">
             {result === 'wrong' && <div className="text-red-600 font-medium mb-3">Correct answer: {current.romaji}</div>}
-            <NextBar onNext={() => nextQuestion(current.char)} />
           </div>
         )}
       </div>
+      <NextBar enabled={!!result} onNext={() => result && nextQuestion(current.char)} />
     </div>
   );
 }
@@ -369,6 +401,9 @@ export default function App() {
   const [preset, setPreset] = useState('custom');
   const [summary, setSummary] = useState(null);
   const [offline, setOffline] = useState(false);
+  const [loadError, setLoadError] = useState(null);
+  const [saveError, setSaveError] = useState(null);
+  const baseRef = useRef(null); // today's seconds per track as the server had them when the app opened
   const [saving, setSaving] = useState(false);
   const [lastSaved, setLastSaved] = useState(null);
   const [showRomaji, setShowRomajiState] = useState(() => {
@@ -380,20 +415,31 @@ export default function App() {
   });
 
   // Every server-confirmed session save updates the "Last saved" line.
-  const log = useSessionLog((res) => res?.saved_at && setLastSaved(new Date(res.saved_at)));
+  const log = useSessionLog((res) => {
+    if (res?.saved_at) {
+      setLastSaved(new Date(res.saved_at));
+      setSaveError(null);
+    } else if (res?.error) setSaveError(res.error);
+  });
 
   const loadSummary = useCallback(
     () =>
       fetch('/api/export')
-        .then((r) => (r.ok ? r.json() : Promise.reject()))
+        .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
         .then((data) => {
           setSummary(data);
           setOffline(false);
+          setLoadError(null);
+          if (!baseRef.current) {
+            const t = data.today;
+            baseRef.current = { day: data.day, kana: t.kana.seconds, words: t.words.seconds, phrases: t.phrases.seconds };
+          }
           setLastSaved((prev) => prev ?? (data.last_sync ? new Date(data.last_sync) : null));
           return data;
         })
-        .catch(() => {
+        .catch((status) => {
           setOffline(true);
+          setLoadError(typeof status === 'number' ? status : null);
           return null;
         }),
     []
@@ -454,11 +500,12 @@ export default function App() {
     setSaving(false);
   };
 
+  const baseFor = (type) => (baseRef.current?.day === etDay() ? baseRef.current[type] : 0);
   const streak = summary?.streak ?? 0;
   const suggestRomajiOff = !!summary?.gate?.hiragana?.pass;
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-purple-50 to-pink-100 p-4 sm:p-8">
+    <div className="min-h-screen bg-gradient-to-br from-purple-50 to-pink-100 p-4 sm:p-8 pb-32">
       <div className="max-w-2xl mx-auto">
         <div className="flex items-center justify-center gap-3 mb-4">
           <h1 className="text-4xl font-bold text-purple-700">HiraKata</h1>
@@ -484,6 +531,8 @@ export default function App() {
           <Home
             summary={summary}
             offline={offline}
+            loadError={loadError}
+            saveError={saveError}
             onStartKana={startKana}
             onStartSecond={() => go(PLAN.phrasesOn ? 'phrases' : 'words')}
             onSave={saveNow}
@@ -491,10 +540,11 @@ export default function App() {
             lastSaved={lastSaved}
           />
         )}
-        {tab === 'kana' && <Kana log={log} preset={preset} setPreset={setPreset} />}
+        {tab === 'kana' && <Kana log={log} base={baseFor('kana')} preset={preset} setPreset={setPreset} />}
         {tab === 'words' && !PLAN.phrasesOn && (
           <Words
             log={log}
+            base={baseFor('words')}
             showRomaji={showRomaji}
             setShowRomaji={setShowRomaji}
             suggestRomajiOff={suggestRomajiOff}
