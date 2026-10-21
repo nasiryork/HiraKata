@@ -26,15 +26,18 @@ export function parseUntil(until) {
   return m ? { questions: Number(m[1]), pct: Number(m[2]) } : { questions: 20, pct: 90 };
 }
 
-// agg = { kana: {seconds, questions, correct}, phrases: {seconds, ...} } for one ET day.
+// agg = { kana, words, phrases } each {seconds, questions, correct} for one ET day.
+// The second job line is Words, or Phrases when the phrases track is switched back on.
 export function jobStatus(entry, agg) {
   const u = parseUntil(entry.kana.until);
   const k = agg.kana;
   const kana =
     k.seconds >= entry.kana.minutes * 60 ||
     (k.questions >= u.questions && k.correct / k.questions >= u.pct / 100);
-  const phrases = agg.phrases.seconds >= entry.phrases.minutes * 60;
-  return { kana, phrases, done: kana && phrases };
+  const words = agg.words.seconds >= (entry.words?.minutes ?? 5) * 60;
+  const phrases = agg.phrases.seconds >= (entry.phrases?.minutes ?? 5) * 60;
+  const second = PLAN.phrasesOn ? phrases : words;
+  return { kana, words, phrases, second, done: kana && second };
 }
 
 export function bannerText(entry) {
@@ -42,6 +45,8 @@ export function bannerText(entry) {
   const label = KANA_PRESETS[entry.kana.preset] ?? entry.kana.preset;
   return {
     kana: `${label}, ${entry.kana.minutes} min or ${u.questions} right at ${u.pct}%`,
-    phrases: `Phrases, ${entry.phrases.minutes} min`,
+    second: PLAN.phrasesOn
+      ? `Phrases, ${entry.phrases?.minutes ?? 5} min`
+      : `Words, ${entry.words?.minutes ?? 5} min`,
   };
 }

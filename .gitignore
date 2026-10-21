@@ -7,3 +7,7 @@ CLAUDE.md
 HANDOFF.md
 docs/handoff-*.md
 .claude
+
+# Private: never commit (rude/casual held words, personal word seed)
+private/
+docs/words-seed.json

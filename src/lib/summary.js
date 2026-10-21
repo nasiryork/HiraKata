@@ -1,5 +1,7 @@
 // Server-side progress summary, shared by /api/export and /api/session (job check).
 import { PHRASES } from '../data/phrases.js';
+import { PLAN, WORDS_RULE } from '../data/plan.js';
+import { getPoolState, wordRows, isKnown, nextBatchAt, poolWords, loadWordList } from './words.js';
 import { etDay, addDays } from './et.js';
 import { planFor, jobStatus, GATE, WEAK } from './plan.js';
 
@@ -14,7 +16,7 @@ export async function dayAgg(db, day) {
     )
     .bind(day)
     .all();
-  const agg = { kana: { ...EMPTY }, phrases: { ...EMPTY } };
+  const agg = { kana: { ...EMPTY }, words: { ...EMPTY }, phrases: { ...EMPTY } };
   for (const r of results) {
     if (agg[r.type]) agg[r.type] = { seconds: r.seconds, questions: r.questions, correct: r.correct };
   }
@@ -62,7 +64,7 @@ async function gate(db, script) {
 export async function buildSummary(db) {
   const day = etDay();
   const { week, weekFrom, entry } = planFor(day);
-  const [agg, st, hira, kata, sessionsWeek, charStats, phraseStats, log, sync] = await Promise.all([
+  const [agg, st, hira, kata, sessionsWeek, charStats, phraseStats, log, sync, poolState, wRows, wordList] = await Promise.all([
     dayAgg(db, day),
     streakInfo(db, day),
     gate(db, 'hiragana'),
@@ -75,6 +77,9 @@ export async function buildSummary(db) {
       .bind(addDays(day, -13))
       .all(),
     db.prepare("SELECT value FROM settings WHERE key = 'last_sync'").first(),
+    getPoolState(db, day),
+    wordRows(db),
+    loadWordList(db),
   ]);
 
   const job = jobStatus(entry, agg);
@@ -92,6 +97,28 @@ export async function buildSummary(db) {
   // "free" is reported as released phrases not yet seen in a quiz.
   const free = released.filter((p) => !byId.get(p.id)?.seen).length;
 
+  // Words track: pool = first N words by id; known per the counter rule in lib/words.js.
+  const pool = poolWords(wordList, poolState.size);
+  const poolRows = pool.map((w) => ({ w, r: wRows.get(w.id) }));
+  const wordsKnown = poolRows.filter(({ r }) => isKnown(r)).length;
+  const wordsSeen = poolRows.filter(({ r }) => r?.seen).length;
+  const timed = poolRows.filter(({ r }) => r?.avg_ms != null);
+  const wordsAvg = timed.length ? Math.round(timed.reduce((sum, { r }) => sum + r.avg_ms, 0) / timed.length) : null;
+  const wordsWeak = poolRows
+    .filter(({ r }) => r && r.seen >= WORDS_RULE.weakMinSeen && r.correct / r.seen < WORDS_RULE.weakAccuracy)
+    .sort((a, b) => a.r.correct / a.r.seen - b.r.correct / b.r.seen)
+    .map(({ w, r }) => ({ id: w.id, jp: w.jp, en: w.en, group: w.group, accuracy: r.correct / r.seen, avg_ms: r.avg_ms }));
+  const words = {
+    released: pool.length,
+    total: wordList.length,
+    seen: wordsSeen,
+    known: wordsKnown,
+    avg_ms: wordsAvg,
+    next_batch_at: pool.length >= wordList.length ? null : nextBatchAt(pool.length),
+    pool_since: poolState.since,
+    weak: wordsWeak,
+  };
+
   const pct = (g) => (g.accuracy == null ? '-' : `${Math.round(g.accuracy * 100)}% / ${(g.avg_ms / 1000).toFixed(1)}s`);
   const text = [
     `HiraKata export ${day} (ET)`,
@@ -100,8 +127,9 @@ export async function buildSummary(db) {
     `Weak (seen>=${WEAK.minSeen}, <${WEAK.accuracy * 100}%): ${
       weak.length ? weak.map((w) => `${w.char} ${Math.round(w.accuracy * 100)}%`).join(', ') : 'none'
     }`,
-    `Phrases: ${released.length} released, ${said} said, ${free} free`,
-    `Today's job: ${job.done ? 'done' : `kana ${job.kana ? 'done' : 'open'}, phrases ${job.phrases ? 'done' : 'open'}`}`,
+    `Words: ${words.released} released, ${words.known} known, ${words.next_batch_at == null ? 'all released' : `next batch at ${words.next_batch_at}`}`,
+    ...(PLAN.phrasesOn ? [`Phrases: ${released.length} released, ${said} said, ${free} free`] : []),
+    `Today's job: ${job.done ? 'done' : `kana ${job.kana ? 'done' : 'open'}, ${PLAN.phrasesOn ? 'phrases' : 'words'} ${job.second ? 'done' : 'open'}`}`,
   ].join('\n');
 
   return {
@@ -115,9 +143,11 @@ export async function buildSummary(db) {
     today: agg,
     gate: { hiragana: hira, katakana: kata, need: GATE },
     weak,
-    phrases: { released: released.length, said, free },
+    words,
+    phrases: { on: PLAN.phrasesOn, released: released.length, said, free },
     character_stats: charStats.results,
     phrase_stats: phraseStats.results,
+    word_stats: [...wRows.values()].map((r) => ({ ...r, known: isKnown(r) })),
     session_log: log.results,
   };
 }
