@@ -3,3 +3,7 @@ dist
 .DS_Store
 .wrangler
 .dev.vars
+CLAUDE.md
+HANDOFF.md
+docs/handoff-*.md
+.claude
