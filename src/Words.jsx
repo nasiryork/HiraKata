@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useLayoutEffect } from 'react';
 import { WORDS } from './data/words.js';
 import { WORDS_RULE as R, ADAPT } from './data/plan.js';
 import { activeWords, nextBatchAt, mergeWords } from './lib/words.js';
@@ -163,7 +163,7 @@ export default function Words({ log, base, showRomaji, setShowRomaji, suggestRom
   };
 
   // The shell mounts with the first question, after nextQuestion's own focus() had no input yet.
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (q?.typed) inputRef.current?.focus({ preventScroll: true });
   }, [q]);
 

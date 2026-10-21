@@ -1,12 +1,13 @@
-import React, { useState, useMemo, useRef, useEffect } from 'react';
+import React, { useState, useMemo, useRef, useEffect, useLayoutEffect } from 'react';
 import NextBar from './NextBar.jsx';
 import TodayProgress from './TodayProgress.jsx';
 import TypedShell, { dropKeyboard } from './TypedShell.jsx';
 import ModeSwitch from './ModeSwitch.jsx';
 import { ADAPT } from './data/plan.js';
-import { KANA_PRESETS, goals, planFor } from './lib/plan.js';
+import { goals, planFor } from './lib/plan.js';
 import { etDay } from './lib/et.js';
-import { ALL_KANA, levelChars, unlockedKeys, pickDistractors, canReverse, extraSpelling } from './lib/kana.js';
+import { SETS, KINDS, kindIgnored, setPool, weakChars, pickDistractors, canReverse, extraSpelling } from './lib/kana.js';
+import { kanaStore, loadKanaStore } from './lib/kanaStore.js';
 import { sameRomaji } from './lib/romaji.js';
 import { nextWeight, typedChance } from './lib/weight.js';
 import { accColor } from './lib/color.js';
@@ -18,7 +19,7 @@ const shuffle = (a) => [...a].sort(() => Math.random() - 0.5);
 
 function weightedPick(pool, weights, excludeChar) {
   const candidates = pool.length > 1 ? pool.filter((k) => k.char !== excludeChar) : pool;
-  const wt = (k) => (weights[k.char] ?? 1) * (k.bg ? ADAPT.backgroundWeight : 1);
+  const wt = (k) => weights[k.char] ?? 1;
   const total = candidates.reduce((sum, k) => sum + wt(k), 0);
   let r = Math.random() * total;
   for (const k of candidates) {
@@ -37,26 +38,14 @@ const Score = ({ stats }) => (
   </span>
 );
 
-export default function Kana({ log, base, preset, setPreset, autoBg, level, dakutenK, mode, setMode, onHome }) {
-  const [script, setScript] = useState('hiragana');
-  const [category, setCategory] = useState('basic');
+export default function Kana({ log, base, sel, setSel, mode, setMode, onHome }) {
+  const [weak, setWeak] = useState([]); // "Custom": his weakest characters, refreshed on every start
 
-  const pool = useMemo(() => {
-    if (preset === 'custom') {
-      return ALL_KANA.filter((k) => (script === 'both' || k.script === script) && (category === 'all' || k.category === category));
-    }
-    const main = levelChars(preset, dakutenK).map((k) => ({ ...k }));
-    if (!autoBg) return main;
-    const have = new Set(main.map((k) => k.char));
-    const bg = unlockedKeys(level)
-      .flatMap((key) => levelChars(key, dakutenK))
-      .filter((k) => !have.has(k.char) && have.add(k.char))
-      .map((k) => ({ ...k, bg: true }));
-    return [...main, ...bg];
-  }, [preset, script, category, autoBg, level, dakutenK]);
+  // The pool depends only on the two dropdowns. Choose/Type/Mix never changes it.
+  const pool = useMemo(() => setPool(sel.set, sel.kind, weak), [sel.set, sel.kind, weak]);
 
-  const weights = useRef({});
-  const meta = useRef({}); // char -> {seen, correct, avg_ms}, mirrors what's persisted server-side
+  const weights = useRef(kanaStore.weights);
+  const meta = useRef(kanaStore.meta); // char -> {seen, correct, avg_ms}, mirrors what's persisted server-side
   const avgTime = useRef(START_AVG_MS);
   const inputRef = useRef(null);
 
@@ -69,22 +58,13 @@ export default function Kana({ log, base, preset, setPreset, autoBg, level, daku
   const loaded = useRef(false);
   const [stats, setStats] = useState({ answered: 0, correct: 0, streak: 0 });
 
-  // Load persisted per-character weights once; /api/* is absent under plain `vite dev`.
+  // Stats are prefetched at app start (kanaStore), so this is usually already resolved.
   useEffect(() => {
-    fetch('/api/stats')
-      .then((r) => (r.ok ? r.json() : null))
-      .then((data) => {
-        if (!data) return;
-        for (const row of Object.values(data)) {
-          weights.current[row.char] = row.weight;
-          meta.current[row.char] = { seen: row.seen, correct: row.correct, avg_ms: row.avg_ms };
-        }
-      })
-      .catch(() => {})
-      .finally(() => {
-        loaded.current = true;
-        setLoadedTick((t) => t + 1);
-      });
+    loadKanaStore().finally(() => {
+      setWeak(weakChars(meta.current));
+      loaded.current = true;
+      setLoadedTick((t) => t + 1);
+    });
   }, []);
 
   const accOf = (ch) => {
@@ -110,11 +90,11 @@ export default function Kana({ log, base, preset, setPreset, autoBg, level, daku
 
   // Fresh question + session whenever the pool or mode changes. Per-character weights are
   // not reset - they're a property of the character, not the current view.
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!loaded.current) return;
     avgTime.current = START_AVG_MS;
     setStats({ answered: 0, correct: 0, streak: 0 });
-    log.begin(`kana:${mode}`, preset === 'custom' ? `custom:${script}/${category}` : preset);
+    log.begin(`kana:${mode}`, `${sel.set}/${sel.kind}`);
     nextQuestion(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pool, mode, loadedTick]);
@@ -163,7 +143,7 @@ export default function Kana({ log, base, preset, setPreset, autoBg, level, daku
   };
 
   // The shell mounts with the first question, after nextQuestion's own focus() had no input yet.
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (q?.typed) inputRef.current?.focus({ preventScroll: true });
   }, [q]);
 
@@ -207,29 +187,36 @@ export default function Kana({ log, base, preset, setPreset, autoBg, level, daku
       {!typedNow && (
         <>
           <div className="bg-white rounded-2xl shadow-xl p-4 mb-4 flex flex-wrap gap-3 items-center justify-center">
-            <select value={preset} onChange={(e) => setPreset(e.target.value)} className="p-3 border border-gray-300 rounded-lg">
-              <option value="custom">Custom</option>
-              {Object.entries(KANA_PRESETS).map(([id, label]) => (
-                <option key={id} value={id}>
-                  {label}
-                </option>
-              ))}
-            </select>
-            {preset === 'custom' && (
-              <>
-                <select value={script} onChange={(e) => setScript(e.target.value)} className="p-3 border border-gray-300 rounded-lg">
-                  <option value="hiragana">Hiragana</option>
-                  <option value="katakana">Katakana</option>
-                  <option value="both">Both</option>
-                </select>
-                <select value={category} onChange={(e) => setCategory(e.target.value)} className="p-3 border border-gray-300 rounded-lg">
-                  <option value="basic">Basic</option>
-                  <option value="dakuten">Dakuten</option>
-                  <option value="combo">Combinations</option>
-                  <option value="all">All</option>
-                </select>
-              </>
-            )}
+            <div className="grid grid-cols-2 gap-2 w-full">
+              <select
+                value={sel.set}
+                onChange={(e) => {
+                  if (e.target.value === 'weak') setWeak(weakChars(meta.current));
+                  setSel({ ...sel, set: e.target.value });
+                }}
+                aria-label="Which set"
+                className="p-3 border border-gray-300 rounded-lg bg-white min-w-0"
+              >
+                {SETS.map((o) => (
+                  <option key={o.id} value={o.id}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+              <select
+                value={sel.kind}
+                onChange={(e) => setSel({ ...sel, kind: e.target.value })}
+                disabled={kindIgnored(sel.set)}
+                aria-label="Which kind"
+                className="p-3 border border-gray-300 rounded-lg bg-white min-w-0 disabled:bg-gray-100 disabled:text-gray-400"
+              >
+                {KINDS.map((o) => (
+                  <option key={o.id} value={o.id}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            </div>
             <ModeSwitch mode={mode} setMode={setMode} />
           </div>
 

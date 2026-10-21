@@ -135,3 +135,59 @@ export function needText(level) {
   const need = ADAPT.levelNeed[level];
   return `${Math.round(need.acc * 100)}% over ${need.n}${need.ms ? ` under ${need.ms / 1000}s` : ''}${need.days ? `, ${need.days} days` : ''}${need.typed ? ', some typed' : ''}`;
 }
+
+// --- the two Kana dropdowns: which set (left) and which kind (right) ---
+
+export const SETS = [
+  { id: 'hiragana', label: 'Hiragana' },
+  { id: 'katakana', label: 'Katakana' },
+  { id: 'both', label: 'H+K' },
+  { id: 'lookalikes', label: 'Look-alikes' },
+  { id: 'weak', label: 'Custom (weak spots)' },
+];
+export const KINDS = [
+  { id: 'basic', label: 'Basic' },
+  { id: 'dakuten', label: 'Dakuten' },
+  { id: 'handakuten', label: 'Handakuten' },
+  { id: 'combo', label: 'Combos' },
+  { id: 'all', label: 'All' },
+];
+export const kindIgnored = (set) => set === 'lookalikes' || set === 'weak';
+
+const isHandakuten = (k) => k.category === 'dakuten' && k.romaji.startsWith('p');
+const inKind = (k, kind) =>
+  kind === 'all' ||
+  (kind === 'handakuten' ? isHandakuten(k) : kind === 'dakuten' ? k.category === 'dakuten' && !isHandakuten(k) : k.category === kind);
+
+export function setPool(set, kind, weakChars = []) {
+  if (set === 'lookalikes') return levelChars('lookalikes');
+  if (set === 'weak') return weakChars.length ? weakChars : levelChars('lookalikes');
+  return ALL_KANA.filter((k) => (set === 'both' || k.script === set) && inKind(k, kind));
+}
+
+// His ~12 weakest characters (seen >= 3): lowest accuracy first, then slowest. `meta` is char -> {seen, correct, avg_ms}.
+export function weakChars(meta, n = 12) {
+  return Object.entries(meta)
+    .filter(([, m]) => m.seen >= 3)
+    .sort(([, a], [, b]) => a.correct / a.seen - b.correct / b.seen || (b.avg_ms ?? 0) - (a.avg_ms ?? 0))
+    .map(([ch]) => kanaOf(ch))
+    .filter(Boolean)
+    .slice(0, n);
+}
+
+// Map the app's suggested level/preset onto the two dropdowns.
+const SUGGEST = {
+  lookalikes: ['lookalikes', 'all'],
+  shitsu: ['lookalikes', 'all'],
+  'hira-basic': ['hiragana', 'basic'],
+  'hira-all': ['hiragana', 'all'],
+  'kata-basic': ['katakana', 'basic'],
+  dakuten: ['both', 'dakuten'],
+  combos: ['both', 'combo'],
+  all: ['both', 'all'],
+};
+export function suggestionFor(preset) {
+  const [set, kind] = SUGGEST[preset] ?? ['both', 'all'];
+  const sl = SETS.find((s) => s.id === set).label;
+  return { set, kind, label: kindIgnored(set) ? sl : `${sl}, ${KINDS.find((x) => x.id === kind).label}` };
+}

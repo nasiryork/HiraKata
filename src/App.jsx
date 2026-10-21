@@ -7,12 +7,27 @@ import GateBar from './GateBar.jsx';
 import { KeyboardAnchor, primeKeyboard } from './TypedShell.jsx';
 import { PLAN } from './data/plan.js';
 import { useSessionLog } from './lib/useSessionLog.js';
-import { KANA_PRESETS, GATE, planFor, bannerText, goals, isAuto } from './lib/plan.js';
+import { GATE, planFor, bannerText, goals, isAuto } from './lib/plan.js';
+import { suggestionFor, SETS, KINDS } from './lib/kana.js';
+import { loadKanaStore } from './lib/kanaStore.js';
 import { etDay } from './lib/et.js';
 
 const ROMAJI_KEY = 'hirakata-show-romaji';
 const MODE_KEY = (section) => `hirakata-mode-${section}`;
 const MODES = ['choice', 'typed', 'mix'];
+const SEL_KEY = 'hirakata-kana-sel';
+const DEFAULT_SEL = { set: 'both', kind: 'basic' };
+
+const validSel = (x) =>
+  x && SETS.some((s) => s.id === x.set) && KINDS.some((k) => k.id === x.kind) ? { set: x.set, kind: x.kind } : null;
+
+const readSel = () => {
+  try {
+    return validSel(JSON.parse(localStorage.getItem(SEL_KEY))) ?? DEFAULT_SEL;
+  } catch {
+    return DEFAULT_SEL;
+  }
+};
 
 const readMode = (section) => {
   try {
@@ -113,10 +128,12 @@ function AdaptCards({ summary, act }) {
   );
 }
 
-function Home({ summary, offline, loadError, saveError, onStartKana, onStartSecond, onSave, saving, lastSaved, act }) {
+function Home({ summary, offline, loadError, saveError, onStartKana, onStartSecond, onSave, saving, lastSaved, act, sel, onUseSuggestion }) {
   const day = etDay();
   const { entry } = planFor(day);
   const banner = bannerText(entry, summary?.kana?.auto);
+  const suggested = summary?.kana ? suggestionFor(isAuto(entry) ? summary.kana.auto.preset : entry.kana.preset) : null;
+  const sameAsSel = suggested && suggested.set === sel.set && (suggested.kind === sel.kind || suggested.set === 'lookalikes' || suggested.set === 'weak');
   const job = summary?.job ?? { kana: false, second: false, done: false };
   const streak = summary?.streak ?? 0;
   const today = summary?.today ?? { kana: { correct: 0 }, words: { correct: 0 }, phrases: { correct: 0 } };
@@ -155,11 +172,16 @@ function Home({ summary, offline, loadError, saveError, onStartKana, onStartSeco
         <button onClick={onStartKana} className="w-full text-left py-3">
           <span className="flex items-center gap-3">
             {check(job.kana)}
-            <span className="text-gray-800 font-medium">{banner.kana}</span>
+            <span className="text-gray-800 font-medium">Kana, {g.kana} correct</span>
           </span>
           <span className="block mt-2"><Bar frac={kanaN / g.kana} done={job.kana} /></span>
           <span className="block text-sm text-gray-500 mt-1">{Math.min(kanaN, g.kana)} / {g.kana} correct</span>
         </button>
+        {suggested && !sameAsSel && (
+          <button onClick={() => onUseSuggestion(suggested)} className="block w-full text-left text-sm text-purple-700 bg-purple-50 border border-purple-200 rounded-lg px-3 py-2 mb-2">
+            Suggested: {suggested.label} · tap to use
+          </button>
+        )}
         <button onClick={onStartSecond} className="w-full text-left py-3">
           <span className="flex items-center gap-3">
             {check(job.second)}
@@ -200,12 +222,18 @@ function Home({ summary, offline, loadError, saveError, onStartKana, onStartSeco
 
 export default function App() {
   const [tab, setTab] = useState('home'); // 'home' | 'kana' | 'phrases'
-  const [preset, setPresetState] = useState('custom');
-  const [autoBg, setAutoBg] = useState(false); // app-picked job: lower levels stay in the mix at low weight
+  const [sel, setSelState] = useState(readSel); // Kana: which set + which kind; remembered, never overridden by the app
   const [modes, setModes] = useState(() => ({ kana: readMode('kana'), words: readMode('words') }));
-  const setPreset = (p) => {
-    setAutoBg(false);
-    setPresetState(p);
+  const setSel = (next) => {
+    setSelState(next);
+    try {
+      localStorage.setItem(SEL_KEY, JSON.stringify(next));
+    } catch {
+      // storage unavailable - D1 copy below still applies
+    }
+    for (const [key, value] of [['kana_set', next.set], ['kana_kind', next.kind]]) {
+      fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key, value }) }).catch(() => {});
+    }
   };
   const [summary, setSummary] = useState(null);
   const [offline, setOffline] = useState(false);
@@ -267,6 +295,10 @@ export default function App() {
     }).catch(() => {});
   };
 
+  useEffect(() => {
+    loadKanaStore(); // warm the per-character stats so the first Kana/Type screen is instant
+  }, []);
+
   // Choose / Type / Mix, remembered per section (D1 copy wins over localStorage, like romaji).
   const setMode = (section) => (mode) => {
     setModes((m) => ({ ...m, [section]: mode }));
@@ -298,6 +330,8 @@ export default function App() {
       .then((r) => (r.ok ? r.json() : null))
       .then((s) => {
         if (s?.romaji != null) setShowRomajiState(s.romaji !== '0');
+        const remembered = validSel({ set: s?.kana_set, kind: s?.kana_kind });
+        if (remembered) setSelState(remembered);
         setModes((m) => ({
           kana: MODES.includes(s?.mode_kana) ? s.mode_kana : m.kana,
           words: MODES.includes(s?.mode_words) ? s.mode_words : m.words,
@@ -332,16 +366,10 @@ export default function App() {
     setTab(next);
   };
 
-  // Today's kana job: the app's pick from his weakest level, unless plan.js names a preset.
-  const startKana = () => {
-    const entry = planFor(etDay()).entry;
-    if (isAuto(entry) && summary?.kana?.auto) {
-      setPresetState(summary.kana.auto.preset);
-      setAutoBg(true);
-    } else {
-      setPresetState(KANA_PRESETS[entry.kana.preset] ? entry.kana.preset : 'custom');
-      setAutoBg(false);
-    }
+  // Opens Kana with his remembered choice. The app's pick is only ever a suggestion (see Home).
+  const startKana = () => go('kana');
+  const useSuggestion = (sg) => {
+    setSel({ set: sg.set, kind: sg.kind });
     go('kana');
   };
   const goTab = (id) => (id === 'kana' ? startKana() : go(id));
@@ -393,17 +421,16 @@ export default function App() {
             saving={saving}
             lastSaved={lastSaved}
             act={act}
+            sel={sel}
+            onUseSuggestion={useSuggestion}
           />
         )}
         {tab === 'kana' && (
           <Kana
             log={log}
             base={baseFor('kana')}
-            preset={preset}
-            setPreset={setPreset}
-            autoBg={autoBg}
-            level={summary?.kana?.level ?? 4}
-            dakutenK={summary?.kana?.dakuten?.pool ?? 50}
+            sel={sel}
+            setSel={setSel}
             mode={modes.kana}
             setMode={setMode('kana')}
             onHome={() => go('home')}

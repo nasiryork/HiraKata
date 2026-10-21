@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useLayoutEffect } from 'react';
 
 // The typed-answer screen. It is a fixed column exactly as tall as the *visible* viewport
 // (visualViewport shrinks when the iPhone keyboard opens), so the layout is resized once and the
@@ -32,7 +32,7 @@ export function KeyboardAnchor() {
 }
 
 function useVisibleViewport(active) {
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!active) return undefined;
     const root = document.documentElement;
     const vv = window.visualViewport;
