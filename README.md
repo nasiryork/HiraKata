@@ -4,7 +4,7 @@
   <img src="images/logo.png" alt="HiraKata logo, a deer in a graduation cap holding a sign" width="220">
 </p>
 
-A hiragana and katakana practice app I built with Claude Code while learning Japanese.
+A hiragana, katakana and trip phrases practice app I built with Claude Code while learning Japanese.
 
 <p align="center">
   <img src="images/home.png" alt="HiraKata home screen" width="30%">
@@ -39,4 +39,4 @@ To run your own copy, see [SETUP.md](SETUP.md).
 
 ## What's next
 
-I'm pairing this app with /teach, a popular Claude teaching skill from mattpocock/skills, to improve my Japanese before my next trip in 2027. Once I have a strong grasp of both kana I'll look to add helpful and commonly used words and phrases I'm trying to remember.
+I'm pairing this app with /teach, a popular Claude teaching skill from mattpocock/skills, to improve my Japanese before my next trip in 2027.
