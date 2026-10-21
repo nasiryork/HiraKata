@@ -64,7 +64,7 @@ async function gate(db, script) {
 export async function buildSummary(db) {
   const day = etDay();
   const { week, weekFrom, entry } = planFor(day);
-  const [agg, st, hira, kata, sessionsWeek, charStats, phraseStats, log, sync, poolState, wRows, wordList] = await Promise.all([
+  const [agg, st0, hira, kata, sessionsWeek, charStats, phraseStats, log, sync, poolState, wRows, wordList] = await Promise.all([
     dayAgg(db, day),
     streakInfo(db, day),
     gate(db, 'hiragana'),
@@ -83,6 +83,9 @@ export async function buildSummary(db) {
   ]);
 
   const job = jobStatus(entry, agg);
+  // If today's job is already met but the streak was never bumped (e.g. the goals were reached
+  // under an older rule, or a save was missed), settle it now. Idempotent: bumps at most once a day.
+  const st = job.done && !st0.doneToday ? await settleJob(db, day) : st0;
   const weak = charStats.results
     .filter((r) => r.seen >= WEAK.minSeen && r.correct / r.seen < WEAK.accuracy)
     .sort((a, b) => a.correct / a.seen - b.correct / b.seen)
