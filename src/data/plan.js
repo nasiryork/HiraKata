@@ -2,8 +2,8 @@
 // - weekStart: ET date of week 1.
 // - phrasesOn: false parks the Phrases track (tab hidden, job uses Words instead). One-line switch back.
 // - kana.preset: see KANA_PRESETS in src/lib/plan.js.
-// - kana.until: "<N> questions at <P>%" - the day's kana line is met by `minutes` OR this.
-// - words.minutes: the day's Words line (summed across sittings that ET day).
+// - kana.correct / words.correct: right answers needed today. Counted across all sittings that
+//   ET day; no clock involved, so leaving the app open earns nothing.
 // - phrases.newTier: phrases with tier <= newTier are in the pool (only used while phrasesOn).
 export const PLAN = {
   weekStart: '2026-10-12',
@@ -11,9 +11,9 @@ export const PLAN = {
   weeks: [
     {
       week: 1,
-      kana: { preset: 'lookalikes', minutes: 3, until: '20 questions at 90%' },
-      words: { minutes: 5 },
-      phrases: { minutes: 5, newTier: 1 },
+      kana: { preset: 'lookalikes', correct: 20 },
+      words: { correct: 15 },
+      phrases: { correct: 15, newTier: 1 },
     },
   ],
 };

@@ -21,32 +21,31 @@ export function planFor(day) {
   return { week, weekFrom: addDays(PLAN.weekStart, 7 * (week - 1)), entry };
 }
 
-export function parseUntil(until) {
-  const m = /(\d+)\s*questions?.*?(\d+)\s*%/i.exec(until ?? '');
-  return m ? { questions: Number(m[1]), pct: Number(m[2]) } : { questions: 20, pct: 90 };
-}
+// Correct answers needed today, per track.
+export const goals = (entry) => ({
+  kana: entry.kana.correct ?? 20,
+  words: entry.words?.correct ?? 15,
+  phrases: entry.phrases?.correct ?? 15,
+});
 
-// agg = { kana, words, phrases } each {seconds, questions, correct} for one ET day.
-// The second job line is Words, or Phrases when the phrases track is switched back on.
+// agg = { kana, words, phrases }, each {seconds, questions, correct} for one ET day.
+// A line is met when today's CORRECT answers (summed across sittings) reach the goal; there is
+// no clock, so leaving the app open earns nothing. The second line is Words, or Phrases when
+// the phrases track is switched back on.
 export function jobStatus(entry, agg) {
-  const u = parseUntil(entry.kana.until);
-  const k = agg.kana;
-  const kana =
-    k.seconds >= entry.kana.minutes * 60 ||
-    (k.questions >= u.questions && k.correct / k.questions >= u.pct / 100);
-  const words = agg.words.seconds >= (entry.words?.minutes ?? 5) * 60;
-  const phrases = agg.phrases.seconds >= (entry.phrases?.minutes ?? 5) * 60;
+  const g = goals(entry);
+  const kana = agg.kana.correct >= g.kana;
+  const words = agg.words.correct >= g.words;
+  const phrases = agg.phrases.correct >= g.phrases;
   const second = PLAN.phrasesOn ? phrases : words;
   return { kana, words, phrases, second, done: kana && second };
 }
 
 export function bannerText(entry) {
-  const u = parseUntil(entry.kana.until);
+  const g = goals(entry);
   const label = KANA_PRESETS[entry.kana.preset] ?? entry.kana.preset;
   return {
-    kana: `${label}, ${entry.kana.minutes} min or ${u.questions} right at ${u.pct}%`,
-    second: PLAN.phrasesOn
-      ? `Phrases, ${entry.phrases?.minutes ?? 5} min`
-      : `Words, ${entry.words?.minutes ?? 5} min`,
+    kana: `${label}, ${g.kana} correct`,
+    second: PLAN.phrasesOn ? `Phrases, ${g.phrases} correct` : `Words, ${g.words} correct`,
   };
 }

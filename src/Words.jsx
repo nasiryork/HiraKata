@@ -3,8 +3,8 @@ import { WORDS } from './data/words.js';
 import { WORDS_RULE as R } from './data/plan.js';
 import { poolWords, nextBatchAt, mergeWords } from './lib/words.js';
 import NextBar from './NextBar.jsx';
-import TodayTimer from './TodayTimer.jsx';
-import { planFor } from './lib/plan.js';
+import TodayProgress from './TodayProgress.jsx';
+import { planFor, goals } from './lib/plan.js';
 import { etDay } from './lib/et.js';
 
 const MAX_W = 8;
@@ -217,7 +217,7 @@ export default function Words({ log, base, showRomaji, setShowRomaji, suggestRom
       )}
 
       <div className="bg-white rounded-2xl shadow-xl p-6 text-center">
-        <TodayTimer log={log} type="words" base={base} goalMinutes={planFor(etDay()).entry.words?.minutes ?? 5} />
+        <TodayProgress log={log} type="words" base={base} goal={goals(planFor(etDay()).entry).words} />
         <div className="flex justify-between text-sm text-gray-500 mb-3">
           <span>
             {stats.correct}/{stats.answered} correct
@@ -291,7 +291,7 @@ export default function Words({ log, base, showRomaji, setShowRomaji, suggestRom
 
         {picked && (
           <>
-            <div ref={feedbackRef} style={{ scrollMarginBottom: 110 }} className="mt-4 bg-purple-50 rounded-xl p-4">
+            <div ref={feedbackRef} style={{ scrollMarginBottom: 170 }} className="mt-4 bg-purple-50 rounded-xl p-4">
               <div className="text-2xl font-bold text-gray-800">{current.jp}</div>
               {hasKanji && <div className="text-gray-700">{current.kana}</div>}
               <div className="text-gray-500">{current.romaji}</div>

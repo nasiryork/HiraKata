@@ -5,10 +5,10 @@ import Words from './Words.jsx';
 import Stats from './Stats.jsx';
 import GateBar from './GateBar.jsx';
 import NextBar from './NextBar.jsx';
-import TodayTimer, { mmss } from './TodayTimer.jsx';
+import TodayProgress from './TodayProgress.jsx';
 import { PLAN } from './data/plan.js';
 import { useSessionLog } from './lib/useSessionLog.js';
-import { KANA_PRESETS, GATE, planFor, bannerText, parseUntil } from './lib/plan.js';
+import { KANA_PRESETS, GATE, planFor, bannerText, goals } from './lib/plan.js';
 import { etDay } from './lib/et.js';
 
 const MAX_W = 8;
@@ -91,12 +91,11 @@ function Home({ summary, offline, loadError, saveError, onStartKana, onStartSeco
   const banner = bannerText(entry);
   const job = summary?.job ?? { kana: false, second: false, done: false };
   const streak = summary?.streak ?? 0;
-  const today = summary?.today ?? { kana: { seconds: 0, questions: 0, correct: 0 }, words: { seconds: 0 }, phrases: { seconds: 0 } };
-  const u = parseUntil(entry.kana.until);
-  const k = today.kana;
-  const kAcc = k.questions ? k.correct / k.questions : 0;
+  const today = summary?.today ?? { kana: { correct: 0 }, words: { correct: 0 }, phrases: { correct: 0 } };
+  const g = goals(entry);
   const secondType = PLAN.phrasesOn ? 'phrases' : 'words';
-  const secondMin = (PLAN.phrasesOn ? entry.phrases?.minutes : entry.words?.minutes) ?? 5;
+  const kanaN = today.kana.correct;
+  const secondN = today[secondType].correct;
   const check = (ok) => (
     <span className={`inline-flex w-7 h-7 rounded-full items-center justify-center text-sm shrink-0 ${ok ? 'bg-green-500 text-white' : 'bg-gray-200 text-gray-400'}`}>
       {ok ? '✓' : ''}
@@ -130,19 +129,16 @@ function Home({ summary, offline, loadError, saveError, onStartKana, onStartSeco
             {check(job.kana)}
             <span className="text-gray-800 font-medium">{banner.kana}</span>
           </span>
-          <span className="block mt-2"><Bar frac={k.seconds / (entry.kana.minutes * 60)} done={job.kana} /></span>
-          <span className="block text-sm text-gray-500 mt-1">
-            {mmss(k.seconds)} / {mmss(entry.kana.minutes * 60)} min
-            {' · or '}{k.questions}/{u.questions} questions at {k.questions ? Math.round(kAcc * 100) : 0}% (need {u.pct}%)
-          </span>
+          <span className="block mt-2"><Bar frac={kanaN / g.kana} done={job.kana} /></span>
+          <span className="block text-sm text-gray-500 mt-1">{Math.min(kanaN, g.kana)} / {g.kana} correct</span>
         </button>
         <button onClick={onStartSecond} className="w-full text-left py-3">
           <span className="flex items-center gap-3">
             {check(job.second)}
             <span className="text-gray-800 font-medium">{banner.second}</span>
           </span>
-          <span className="block mt-2"><Bar frac={today[secondType].seconds / (secondMin * 60)} done={job.second} /></span>
-          <span className="block text-sm text-gray-500 mt-1">{mmss(today[secondType].seconds)} / {mmss(secondMin * 60)} min</span>
+          <span className="block mt-2"><Bar frac={secondN / g[secondType]} done={job.second} /></span>
+          <span className="block text-sm text-gray-500 mt-1">{Math.min(secondN, g[secondType])} / {g[secondType]} correct</span>
         </button>
         {offline && (
           <div className="text-sm text-red-600 mt-2">
@@ -336,7 +332,7 @@ function Kana({ log, base, preset, setPreset }) {
       </div>
 
       <div className="bg-white rounded-2xl shadow-xl p-8 text-center">
-        <TodayTimer log={log} type="kana" base={base} goalMinutes={planFor(etDay()).entry.kana.minutes} />
+        <TodayProgress log={log} type="kana" base={base} goal={goals(planFor(etDay()).entry).kana} />
         <div className="text-sm text-gray-500 mb-2">
           {stats.correct}/{stats.answered} correct · streak {stats.streak}
         </div>
@@ -432,7 +428,7 @@ export default function App() {
           setLoadError(null);
           if (!baseRef.current) {
             const t = data.today;
-            baseRef.current = { day: data.day, kana: t.kana.seconds, words: t.words.seconds, phrases: t.phrases.seconds };
+            baseRef.current = { day: data.day, kana: t.kana.correct, words: t.words.correct, phrases: t.phrases.correct };
           }
           setLastSaved((prev) => prev ?? (data.last_sync ? new Date(data.last_sync) : null));
           return data;
@@ -505,7 +501,7 @@ export default function App() {
   const suggestRomajiOff = !!summary?.gate?.hiragana?.pass;
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-purple-50 to-pink-100 p-4 sm:p-8 pb-32">
+    <div className="min-h-screen bg-gradient-to-br from-purple-50 to-pink-100 p-4 sm:p-8 pb-[calc(11rem+env(safe-area-inset-bottom))]">
       <div className="max-w-2xl mx-auto">
         <div className="flex items-center justify-center gap-3 mb-4">
           <h1 className="text-4xl font-bold text-purple-700">HiraKata</h1>

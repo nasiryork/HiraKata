@@ -60,10 +60,14 @@ export async function getPoolState(db, day) {
 }
 
 export async function wordRows(db) {
-  const { results } = await db
-    .prepare('SELECT id, weight, seen, correct, avg_ms, fast_days, days_seen, last_seen_day, known_day FROM word_stats')
-    .all();
-  return new Map(results.map((r) => [r.id, r]));
+  try {
+    const { results } = await db
+      .prepare('SELECT id, weight, seen, correct, avg_ms, fast_days, days_seen, last_seen_day, known_day FROM word_stats')
+      .all();
+    return new Map(results.map((r) => [r.id, r]));
+  } catch {
+    return new Map(); // 0003_words.sql not applied yet
+  }
 }
 
 // Releases at most one batch (never more than R.release words at once). Returns the pool state.

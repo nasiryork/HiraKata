@@ -1,30 +1,26 @@
 import { useRef, useEffect, useCallback } from 'react';
 
 const FLUSH_EVERY = 10; // answers
-const AUTOSAVE_SECONDS = 15; // also save time spent reading feedback, even with no new answer
-const IDLE_MS = 30000; // no tap/key for this long stops the clock
+const MAX_Q_SECONDS = 30; // cap per-question time so a walk-away doesn't inflate the weekly minutes
 
 // Tracks one practice session and persists it to /api/session. The same session id is
 // re-POSTed on every flush, so the server row is replaced, never duplicated.
 //
-// Minutes are ACTIVE time: a 1 s clock that only runs while the page is visible and there
-// was a tap/key in the last 30 s. That includes time spent reading feedback, so the number
-// matches how long you have actually been practising. `totals` is the same clock summed per
-// track (kana/words/phrases) for this page load, which the on-screen timer reads.
+// Today's job is counted in CORRECT ANSWERS (no clock). `seconds` is still logged per session
+// for the weekly export. `correctToday(type)` is this page load's correct count per track,
+// which the on-screen progress adds to what the server already had.
 //
 // `onSettled(result)` gets { streak, doneToday, job, saved_at } on success, or { error }.
 export function useSessionLog(onSettled) {
   const s = useRef(null);
   const settled = useRef(onSettled);
   settled.current = onSettled;
-  const totals = useRef({ kana: 0, words: 0, phrases: 0 });
-  const lastActive = useRef(Date.now());
+  const correct = useRef({ kana: 0, words: 0, phrases: 0 });
 
   const flush = useCallback(() => {
     const cur = s.current;
-    if (!cur || (cur.questions === cur.sent && cur.seconds === cur.sentSeconds)) return Promise.resolve();
+    if (!cur || cur.questions === cur.sent) return Promise.resolve();
     cur.sent = cur.questions;
-    cur.sentSeconds = cur.seconds;
     return fetch('/api/session', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -36,17 +32,13 @@ export function useSessionLog(onSettled) {
         preset: cur.preset,
         questions: cur.questions,
         correct: cur.correct,
-        avg_ms: cur.questions ? Math.round(cur.totalMs / cur.questions) : 0,
-        seconds: cur.seconds,
+        avg_ms: Math.round(cur.totalMs / cur.questions),
+        seconds: Math.round(cur.seconds),
       }),
     })
       .then((r) => (r.ok ? r.json() : { error: r.status }))
       .then((res) => {
-        if (res.error) {
-          // Not saved: resend on the next flush.
-          cur.sent = -1;
-          cur.sentSeconds = -1;
-        }
+        if (res.error) cur.sent = -1; // not saved: resend on the next flush
         settled.current?.(res);
       })
       .catch(() => {}); // dev mode without functions: nothing persists
@@ -57,7 +49,6 @@ export function useSessionLog(onSettled) {
     (mode, preset) => {
       flush();
       const now = Date.now();
-      lastActive.current = now;
       s.current = {
         id: now * 1000 + Math.floor(Math.random() * 1000),
         started_at: new Date(now).toISOString(),
@@ -69,7 +60,6 @@ export function useSessionLog(onSettled) {
         totalMs: 0,
         seconds: 0,
         sent: 0,
-        sentSeconds: 0,
       };
     },
     [flush]
@@ -82,42 +72,27 @@ export function useSessionLog(onSettled) {
       cur.questions += 1;
       cur.correct += isCorrect ? 1 : 0;
       cur.totalMs += ms;
-      lastActive.current = Date.now();
+      cur.seconds += Math.min(ms / 1000, MAX_Q_SECONDS);
+      if (isCorrect && correct.current[cur.type] != null) correct.current[cur.type] += 1;
       if (cur.questions % FLUSH_EVERY === 0) flush();
     },
     [flush]
   );
 
-  // Seconds practised today in this track on this page load (add the server's earlier total).
-  const todaySeconds = useCallback((type) => totals.current[type] ?? 0, []);
+  const correctToday = useCallback((type) => correct.current[type] ?? 0, []);
 
+  // Closing the phone / switching apps must not lose the session.
   useEffect(() => {
-    const touch = () => {
-      lastActive.current = Date.now();
-    };
-    let n = 0;
-    const timer = setInterval(() => {
-      const cur = s.current;
-      if (!cur || document.visibilityState !== 'visible' || Date.now() - lastActive.current > IDLE_MS) return;
-      cur.seconds += 1;
-      if (totals.current[cur.type] != null) totals.current[cur.type] += 1;
-      if (++n % AUTOSAVE_SECONDS === 0) flush();
-    }, 1000);
     const onHide = () => {
-      if (document.visibilityState === 'hidden') flush(); // closing the phone must not lose it
+      if (document.visibilityState === 'hidden') flush();
     };
-    window.addEventListener('pointerdown', touch);
-    window.addEventListener('keydown', touch);
     document.addEventListener('visibilitychange', onHide);
     window.addEventListener('pagehide', flush);
     return () => {
-      clearInterval(timer);
-      window.removeEventListener('pointerdown', touch);
-      window.removeEventListener('keydown', touch);
       document.removeEventListener('visibilitychange', onHide);
       window.removeEventListener('pagehide', flush);
     };
   }, [flush]);
 
-  return { begin, record, flush, todaySeconds };
+  return { begin, record, flush, correctToday };
 }
