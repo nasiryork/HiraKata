@@ -98,6 +98,7 @@ function Home({ summary, offline, onStartKana, onStartPhrases, onSync, syncMsg, 
   const { entry } = planFor(day);
   const banner = bannerText(entry);
   const job = summary?.job ?? { kana: false, phrases: false, done: false };
+  const streak = summary?.streak ?? 0;
   const check = (ok) => (
     <span className={`inline-flex w-7 h-7 rounded-full items-center justify-center text-sm shrink-0 ${ok ? 'bg-green-500 text-white' : 'bg-gray-200 text-gray-400'}`}>
       {ok ? '✓' : ''}
@@ -106,6 +107,22 @@ function Home({ summary, offline, onStartKana, onStartPhrases, onSync, syncMsg, 
 
   return (
     <div>
+      <div className="bg-white rounded-2xl shadow-xl p-6 mb-4 flex items-center gap-4">
+        <span className={`text-5xl ${streak > 0 ? '' : 'grayscale opacity-50'}`}>🔥</span>
+        <div>
+          <div className="text-3xl font-bold text-orange-600">
+            {streak} {streak === 1 ? 'day' : 'days'}
+          </div>
+          <div className="text-sm text-gray-500">
+            {streak === 0
+              ? 'Finish today’s job to start a streak'
+              : job.done
+                ? 'Streak safe for today'
+                : 'Finish today’s job to keep it going'}
+          </div>
+        </div>
+      </div>
+
       <div className="bg-white rounded-2xl shadow-xl p-6 mb-4">
         <div className="text-sm text-gray-500 mb-3">
           Today{job.done ? ' · done 🎉' : ''}
