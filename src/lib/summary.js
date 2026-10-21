@@ -1,7 +1,8 @@
 // Server-side progress summary, shared by /api/export and /api/session (job check).
 import { PHRASES } from '../data/phrases.js';
-import { PLAN, WORDS_RULE } from '../data/plan.js';
-import { getPoolState, wordRows, isKnown, nextBatchAt, poolWords, loadWordList } from './words.js';
+import { PLAN, WORDS_RULE, ADAPT } from '../data/plan.js';
+import { adaptSummary } from './adapt.js';
+import { getPoolState, wordRows, isKnown, nextBatchAt, activeWords, loadWordList } from './words.js';
 import { etDay, addDays } from './et.js';
 import { planFor, jobStatus, GATE, WEAK } from './plan.js';
 
@@ -49,28 +50,34 @@ export async function settleJob(db, day) {
   return { job, ...info };
 }
 
-async function gate(db, script) {
-  const { results } = await db
-    .prepare('SELECT correct, ms FROM answer_log WHERE script = ? ORDER BY id DESC LIMIT ?')
-    .bind(script, GATE.window)
-    .all();
+// Last GATE.window answers for a script (or all kana). Katakana and the mixed G4 gate also need
+// some typed answers in the window, so they are not passed on multiple choice alone.
+async function gate(db, script, { ms = GATE.avgMs, needTyped = false } = {}) {
+  const q = script
+    ? db.prepare('SELECT correct, ms, typed FROM answer_log WHERE script = ? ORDER BY id DESC LIMIT ?').bind(script, GATE.window)
+    : db.prepare('SELECT correct, ms, typed FROM answer_log ORDER BY id DESC LIMIT ?').bind(GATE.window);
+  const { results } = await q.all();
   const n = results.length;
-  if (!n) return { n: 0, accuracy: null, avg_ms: null, pass: false };
+  if (!n) return { n: 0, accuracy: null, avg_ms: null, typed: 0, need_ms: ms, pass: false };
   const accuracy = results.reduce((s, r) => s + r.correct, 0) / n;
   const avg_ms = Math.round(results.reduce((s, r) => s + r.ms, 0) / n);
-  return { n, accuracy, avg_ms, pass: n >= GATE.window && accuracy >= GATE.accuracy && avg_ms < GATE.avgMs };
+  const typed = results.filter((r) => r.typed).length;
+  const mixOk = !needTyped || typed >= ADAPT.minTyped;
+  return { n, accuracy, avg_ms, typed, need_ms: ms, pass: n >= GATE.window && accuracy >= GATE.accuracy && avg_ms < ms && mixOk };
 }
 
 export async function buildSummary(db) {
   const day = etDay();
   const { week, weekFrom, entry } = planFor(day);
-  const [agg, st0, hira, kata, sessionsWeek, charStats, phraseStats, log, sync, poolState, wRows, wordList] = await Promise.all([
+  const [agg, st0, hira, kata, mixed, adapt, sessionsWeek, charStats, phraseStats, log, sync, poolState, wRows, wordList] = await Promise.all([
     dayAgg(db, day),
     streakInfo(db, day),
     gate(db, 'hiragana'),
-    gate(db, 'katakana'),
+    gate(db, 'katakana', { ms: 2500, needTyped: true }),
+    gate(db, null, { needTyped: true }),
+    adaptSummary(db, day).catch(() => null),
     db.prepare('SELECT COUNT(*) AS n, COALESCE(SUM(seconds), 0) AS s FROM session_log WHERE day >= ?').bind(weekFrom).first(),
-    db.prepare('SELECT script, char, weight, seen, correct, avg_ms, last_seen FROM character_stats').all(),
+    db.prepare('SELECT script, char, weight, seen, correct, avg_ms, last_seen, typed_seen, typed_correct FROM character_stats').all(),
     db.prepare('SELECT id, weight, seen, correct, said_count, said_days, last_said_day FROM phrase_stats').all(),
     db
       .prepare('SELECT id, day, started_at, mode, preset, questions, correct, avg_ms, seconds FROM session_log WHERE day >= ? ORDER BY id')
@@ -101,7 +108,7 @@ export async function buildSummary(db) {
   const free = released.filter((p) => !byId.get(p.id)?.seen).length;
 
   // Words track: pool = first N words by id; known per the counter rule in lib/words.js.
-  const pool = poolWords(wordList, poolState.size);
+  const pool = activeWords(wordList, poolState.size, poolState.resting);
   const poolRows = pool.map((w) => ({ w, r: wRows.get(w.id) }));
   const wordsKnown = poolRows.filter(({ r }) => isKnown(r)).length;
   const wordsSeen = poolRows.filter(({ r }) => r?.seen).length;
@@ -111,17 +118,33 @@ export async function buildSummary(db) {
     .filter(({ r }) => r && r.seen >= WORDS_RULE.weakMinSeen && r.correct / r.seen < WORDS_RULE.weakAccuracy)
     .sort((a, b) => a.r.correct / a.r.seen - b.r.correct / b.r.seen)
     .map(({ w, r }) => ({ id: w.id, jp: w.jp, en: w.en, group: w.group, accuracy: r.correct / r.seen, avg_ms: r.avg_ms }));
+  const wr = [...wRows.values()];
+  const wSeen = wr.reduce((a, r) => a + r.seen, 0);
+  const wCorrect = wr.reduce((a, r) => a + r.correct, 0);
+  const wTypedSeen = wr.reduce((a, r) => a + (r.typed_seen ?? 0), 0);
+  const wTypedCorrect = wr.reduce((a, r) => a + (r.typed_correct ?? 0), 0);
+  const wTyped = { seen: wSeen - wTypedSeen, correct: wCorrect - wTypedCorrect, typed_seen: wTypedSeen, typed_correct: wTypedCorrect };
   const words = {
-    released: pool.length,
+    released: pool.length + poolState.resting.length,
+    active: pool.length,
+    resting: poolState.resting.length,
+    resting_ids: poolState.resting,
     total: wordList.length,
     seen: wordsSeen,
     known: wordsKnown,
     avg_ms: wordsAvg,
-    next_batch_at: pool.length >= wordList.length ? null : nextBatchAt(pool.length),
+    next_batch_at: poolState.size >= wordList.length ? null : nextBatchAt(pool.length),
+    accuracy: {
+      choice: { n: wTyped.seen, accuracy: wTyped.seen ? wTyped.correct / wTyped.seen : null },
+      typed: { n: wTyped.typed_seen, accuracy: wTyped.typed_seen ? wTyped.typed_correct / wTyped.typed_seen : null },
+    },
+    last_event: adapt?.words?.last_event ?? null,
+    adapt: adapt?.words ?? null,
     pool_since: poolState.since,
     weak: wordsWeak,
   };
 
+  const pa = (a) => (a?.accuracy == null ? '-' : `${Math.round(a.accuracy * 100)}% of ${a.n}`);
   const pct = (g) => (g.accuracy == null ? '-' : `${Math.round(g.accuracy * 100)}% / ${(g.avg_ms / 1000).toFixed(1)}s`);
   const text = [
     `HiraKata export ${day} (ET)`,
@@ -130,7 +153,12 @@ export async function buildSummary(db) {
     `Weak (seen>=${WEAK.minSeen}, <${WEAK.accuracy * 100}%): ${
       weak.length ? weak.map((w) => `${w.char} ${Math.round(w.accuracy * 100)}%`).join(', ') : 'none'
     }`,
-    `Words: ${words.released} released, ${words.known} known, ${words.next_batch_at == null ? 'all released' : `next batch at ${words.next_batch_at}`}`,
+    `Kana level: ${adapt?.kana ? `${adapt.kana.level} ${adapt.kana.level_label}${adapt.kana.level_up ? ` (ready to level up to ${adapt.kana.level_up.label})` : ''}` : '-'} | auto job: ${adapt?.kana?.auto.label ?? '-'} | dakuten batch ${adapt?.dakuten.pool ?? '-'}/${adapt?.dakuten.total ?? '-'}`,
+    `Kana accuracy: choice ${pa(adapt?.kana.accuracy.choice)}, typed ${pa(adapt?.kana.accuracy.typed)} | mixed gate ${pct(mixed)}`,
+    `Words: pool ${words.released} (active ${words.active}, resting ${words.resting}), ${words.known} known, ${words.next_batch_at == null ? 'all released' : `next batch at ${words.next_batch_at}`}`,
+    `Words accuracy: choice ${pa(words.accuracy.choice)}, typed ${pa(words.accuracy.typed)} | last pool change: ${
+      words.last_event ? `${words.last_event.kind} ${words.last_event.n} on ${words.last_event.day}` : 'none'
+    }`,
     ...(PLAN.phrasesOn ? [`Phrases: ${released.length} released, ${said} said, ${free} free`] : []),
     `Today's job: ${job.done ? 'done' : `kana ${job.kana ? 'done' : 'open'}, ${PLAN.phrasesOn ? 'phrases' : 'words'} ${job.second ? 'done' : 'open'}`}`,
   ].join('\n');
@@ -144,7 +172,8 @@ export async function buildSummary(db) {
     plan: entry,
     job,
     today: agg,
-    gate: { hiragana: hira, katakana: kata, need: GATE },
+    gate: { hiragana: hira, katakana: kata, mixed, need: GATE },
+    kana: adapt?.kana ? { ...adapt.kana, dakuten: adapt.dakuten } : null,
     weak,
     words,
     phrases: { on: PLAN.phrasesOn, released: released.length, said, free },

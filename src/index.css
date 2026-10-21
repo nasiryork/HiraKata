@@ -1,3 +1,10 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* Typed-answer screen: the page behind it must not scroll, so the keyboard never shifts layout. */
+html.typing,
+html.typing body {
+  overflow: hidden;
+  overscroll-behavior: none;
+}

@@ -4,6 +4,7 @@ import { daysBetween, addDays } from './et.js';
 export const KANA_PRESETS = {
   lookalikes: 'Look-alikes',
   shitsu: 'Shi / Tsu / So / N',
+  'hira-basic': 'Basic hiragana',
   'hira-all': 'All hiragana',
   'kata-basic': 'Basic katakana',
   dakuten: 'Dakuten',
@@ -41,9 +42,12 @@ export function jobStatus(entry, agg) {
   return { kana, words, phrases, second, done: kana && second };
 }
 
-export function bannerText(entry) {
+// The kana job is picked by the app from his weakest level unless plan.js names a preset.
+export const isAuto = (entry) => !entry.kana.preset || entry.kana.preset === 'auto';
+
+export function bannerText(entry, auto) {
   const g = goals(entry);
-  const label = KANA_PRESETS[entry.kana.preset] ?? entry.kana.preset;
+  const label = isAuto(entry) ? auto?.label ?? 'Kana (auto)' : KANA_PRESETS[entry.kana.preset] ?? entry.kana.preset;
   return {
     kana: `${label}, ${g.kana} correct`,
     second: PLAN.phrasesOn ? `Phrases, ${g.phrases} correct` : `Words, ${g.words} correct`,

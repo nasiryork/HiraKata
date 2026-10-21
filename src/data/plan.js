@@ -11,7 +11,7 @@ export const PLAN = {
   weeks: [
     {
       week: 1,
-      kana: { preset: 'lookalikes', correct: 20 },
+      kana: { preset: 'auto', correct: 20 }, // 'auto' = the app picks from your weakest level; any other preset name overrides it
       words: { correct: 15 },
       phrases: { correct: 15, newTier: 1 },
     },
@@ -30,4 +30,30 @@ export const WORDS_RULE = {
   floorWeight: 0.3, // ...or weight at this floor after 2+ days seen
   weakMinSeen: 3, // export "weak": seen at least this many times...
   weakAccuracy: 0.85, // ...and under this accuracy
+};
+
+// Adaptive rules (tuned weekly from /api/export). Everything here changes the SIZE or MIX of a
+// bounded pool from his own answers; there are no due dates and no manual difficulty rating.
+export const ADAPT = {
+  // Words: "Add 5 words?" card on Home after a session.
+  grow: { acc: 0.9, ms: 4000, n: 20, add: 5, maxPerDay: 10 },
+  // Words: automatic rest of the newest unlearned words (with Undo). Back above restoreAcc over n answers.
+  shrink: { acc: 0.65, n: 20, rest: 5, minPool: 10, restoreAcc: 0.85 },
+  // Dakuten/handakuten arrive in batches of 5; same grow/shrink idea on the last 20 dakuten answers.
+  dakuten: { start: 5, batch: 5, growAcc: 0.9, shrinkAcc: 0.65, n: 20 },
+  // Mix mode: share of typed questions per character (higher once the character is above `above`).
+  mix: { typed: 0.15, typedHigh: 0.35, above: 0.85, reverse: 0.3 },
+  // Characters from lower levels stay in the mix at this relative weight.
+  backgroundWeight: 0.12,
+  minTyped: 5, // a gate needs at least this many typed answers in its window
+  // Level ladder criteria: accuracy over the last n answers on that level's characters.
+  levelNeed: {
+    1: { acc: 0.9, n: 20, days: 2 },
+    2: { acc: 0.95, n: 50, ms: 2000 },
+    3: { acc: 0.95, n: 50, ms: 2500, typed: true },
+    4: { acc: 0.9, n: 20 },
+    5: { acc: 0.9, n: 20 },
+    6: { acc: 0.95, n: 50, ms: 2000, typed: true },
+  },
+  startLevel: 4, // highest unlocked level when nothing is saved yet (dakuten opens alongside katakana)
 };

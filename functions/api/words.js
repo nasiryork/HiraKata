@@ -3,7 +3,7 @@
 // day counters behind "known", and release the next batch if the rule is met.
 import { etDay } from '../../src/lib/et.js';
 import { WORDS_RULE as R } from '../../src/data/plan.js';
-import { evaluateRelease, getPoolState, isKnown, loadWordList, nextBatchAt, wordRows } from '../../src/lib/words.js';
+import { activeWords, evaluateRelease, getPoolState, isKnown, loadWordList, nextBatchAt, wordRows } from '../../src/lib/words.js';
 import { WORDS } from '../../src/data/words.js';
 
 export async function onRequestGet({ env }) {
@@ -17,12 +17,13 @@ export async function onRequestGet({ env }) {
     .sort((a, b) => a.id - b.id);
   const words = {};
   for (const [id, row] of rows) words[id] = { ...row, known: isKnown(row) };
-  return Response.json({ pool_size: pool.size, next_batch_at: nextBatchAt(pool.size), extra, words });
+  return Response.json({ pool_size: pool.size, resting: pool.resting, next_batch_at: nextBatchAt(activeWords(list, pool.size, pool.resting).length), extra, words });
 }
 
 export async function onRequestPost({ env, request }) {
-  const { id, weight, seen, correct, avg_ms = null, ms = 0, isCorrect = false } = await request.json();
+  const { id, weight, seen, correct, avg_ms = null, ms = 0, isCorrect = false, typed = false } = await request.json();
   const day = etDay();
+  const t = typed ? 1 : 0;
   const prev = await env.DB.prepare('SELECT * FROM word_stats WHERE id = ?').bind(id).first();
 
   const fastToday = isCorrect && ms < R.fastMs && prev?.last_fast_day !== day;
@@ -34,17 +35,21 @@ export async function onRequestPost({ env, request }) {
   };
   if (!row.known_day && isKnown({ ...row, weight })) row.known_day = day;
 
-  await env.DB.prepare(
-    `INSERT INTO word_stats (id, weight, seen, correct, avg_ms, fast_days, last_fast_day, days_seen, last_seen_day, known_day, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+  await env.DB.batch([
+    env.DB.prepare(
+    `INSERT INTO word_stats (id, weight, seen, correct, avg_ms, fast_days, last_fast_day, days_seen, last_seen_day, known_day, typed_seen, typed_correct, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
      ON CONFLICT (id) DO UPDATE SET weight = ?, seen = ?, correct = ?, avg_ms = ?, fast_days = ?, last_fast_day = ?,
-       days_seen = ?, last_seen_day = ?, known_day = ?, updated_at = datetime('now')`
-  )
-    .bind(
-      id, weight, seen, correct, avg_ms, row.fast_days, row.last_fast_day, row.days_seen, day, row.known_day,
-      weight, seen, correct, avg_ms, row.fast_days, row.last_fast_day, row.days_seen, day, row.known_day
+       days_seen = ?, last_seen_day = ?, known_day = ?, typed_seen = typed_seen + ?, typed_correct = typed_correct + ?,
+       updated_at = datetime('now')`
     )
-    .run();
+      .bind(
+        id, weight, seen, correct, avg_ms, row.fast_days, row.last_fast_day, row.days_seen, day, row.known_day, t, t && isCorrect ? 1 : 0,
+        weight, seen, correct, avg_ms, row.fast_days, row.last_fast_day, row.days_seen, day, row.known_day, t, t && isCorrect ? 1 : 0
+      ),
+    env.DB.prepare('INSERT INTO word_answer_log (word_id, correct, ms, typed, day) VALUES (?, ?, ?, ?, ?)').bind(id, isCorrect ? 1 : 0, Math.round(ms), t, day),
+    env.DB.prepare('DELETE FROM word_answer_log WHERE id <= (SELECT MAX(id) FROM word_answer_log) - 500'),
+  ]);
 
   const pool = await evaluateRelease(env.DB, day);
   return Response.json({ pool_size: pool.size, known: pool.known, released: pool.released, known_word: !!row.known_day });

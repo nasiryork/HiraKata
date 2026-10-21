@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { mergeWords } from './lib/words.js';
 import { GATE } from './lib/plan.js';
 import GateBar from './GateBar.jsx';
+import { accColor, speedFrac } from './lib/color.js';
 
 const pct = (c, s) => (s ? Math.round((c / s) * 100) : null);
 const secs = (ms) => (ms == null ? '–' : `${(ms / 1000).toFixed(1)}s`);
@@ -10,7 +11,7 @@ const secs = (ms) => (ms == null ? '–' : `${(ms / 1000).toFixed(1)}s`);
 const weakestFirst = (a, b) =>
   a.correct / a.seen - b.correct / b.seen || (b.avg_ms ?? 0) - (a.avg_ms ?? 0) || b.weight - a.weight;
 
-function Row({ label, sub, row, badge }) {
+function Row({ label, sub, row, badge, cut = 2500 }) {
   const acc = pct(row.correct, row.seen);
   return (
     <div className="flex items-center gap-3 py-2 border-b border-gray-100 last:border-0">
@@ -19,12 +20,28 @@ function Row({ label, sub, row, badge }) {
         {sub && <div className="text-xs text-gray-500 truncate">{sub}</div>}
       </div>
       <div className="flex-1 grid grid-cols-4 gap-1 text-sm text-center">
-        <span className={acc < 85 ? 'text-red-600 font-medium' : 'text-gray-800'}>{acc}%</span>
-        <span className="text-gray-700">{secs(row.avg_ms)}</span>
+        <span className="font-medium" style={{ color: accColor(acc / 100) }}>{acc}%</span>
+        <span style={row.avg_ms == null ? undefined : { color: accColor(speedFrac(row.avg_ms, cut)) }}>{secs(row.avg_ms)}</span>
         <span className="text-gray-700">{row.weight.toFixed(1)}</span>
         <span className="text-gray-500">{row.seen}×{badge ? ` ${badge}` : ''}</span>
       </div>
     </div>
+  );
+}
+
+function AccPair({ a }) {
+  const one = (label, x) => (
+    <span className="mr-3">
+      {label}{' '}
+      {x.accuracy == null ? '–' : <span className="font-medium" style={{ color: accColor(x.accuracy) }}>{Math.round(x.accuracy * 100)}%</span>}
+      <span className="text-gray-500"> ({x.n})</span>
+    </span>
+  );
+  return (
+    <>
+      {one('choose', a.choice)}
+      {one('typed', a.typed)}
+    </>
   );
 }
 
@@ -69,6 +86,7 @@ export default function Stats({ summary }) {
     if (!words) return [];
     const byGroup = new Map();
     for (const w of list.slice(0, words.pool_size)) {
+      if (words.resting?.includes(w.id)) continue;
       const row = words.words[w.id];
       if (!row?.seen) continue;
       if (!byGroup.has(w.group)) byGroup.set(w.group, []);
@@ -97,7 +115,19 @@ export default function Stats({ summary }) {
             Kana gate (last {GATE.window} answers, need {GATE.accuracy * 100}% and under {GATE.avgMs / 1000}s)
           </div>
           <GateBar label="Hiragana" g={summary.gate.hiragana} />
-          <GateBar label="Katakana" g={summary.gate.katakana} />
+          <GateBar label="Katakana" g={summary.gate.katakana} needTyped />
+          {summary.gate.mixed && <GateBar label="Everything mixed (G4)" g={summary.gate.mixed} needTyped />}
+        </div>
+      )}
+
+      {summary?.kana && (
+        <div className="bg-white rounded-2xl shadow-xl p-4 mb-4 text-sm text-gray-700">
+          <div className="mb-1">
+            Kana: <AccPair a={summary.kana.accuracy} />
+          </div>
+          <div>
+            Words: <AccPair a={summary.words.accuracy} />
+          </div>
         </div>
       )}
 
@@ -124,7 +154,7 @@ export default function Stats({ summary }) {
             <Header />
             {kana && !kanaRows.length && <div className="text-sm text-gray-500 py-3">No answers yet.</div>}
             {kanaRows.map((r) => (
-              <Row key={r.char} label={r.char} row={r} />
+              <Row key={r.char} label={r.char} row={r} cut={2000} />
             ))}
           </>
         )}
@@ -133,7 +163,7 @@ export default function Stats({ summary }) {
           <>
             {words && (
               <div className="text-sm text-gray-600 mb-3">
-                Pool {words.pool_size} of {list.length} · ✓ = known
+                Pool {words.pool_size - (words.resting?.length ?? 0)} of {list.length}{words.resting?.length ? ` (+${words.resting.length} resting)` : ''} · ✓ = known
               </div>
             )}
             <Header />
@@ -142,7 +172,7 @@ export default function Stats({ summary }) {
               <div key={group} className="mt-4">
                 <div className="text-sm font-bold text-purple-700 mb-1">{group}</div>
                 {items.map(({ w, row }) => (
-                  <Row key={w.id} label={w.jp} sub={w.en} row={row} badge={row.known ? '✓' : ''} />
+                  <Row key={w.id} label={w.jp} sub={w.en} row={row} cut={4000} badge={row.known ? '✓' : ''} />
                 ))}
               </div>
             ))}

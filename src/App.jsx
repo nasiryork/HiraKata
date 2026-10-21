@@ -1,72 +1,27 @@
-import React, { useState, useRef, useMemo, useEffect, useCallback } from 'react';
-import { hiragana, katakana } from './data/kana.js';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import Phrases from './Phrases.jsx';
 import Words from './Words.jsx';
+import Kana from './Kana.jsx';
 import Stats from './Stats.jsx';
 import GateBar from './GateBar.jsx';
-import NextBar from './NextBar.jsx';
-import TodayProgress from './TodayProgress.jsx';
+import { KeyboardAnchor, primeKeyboard } from './TypedShell.jsx';
 import { PLAN } from './data/plan.js';
 import { useSessionLog } from './lib/useSessionLog.js';
-import { KANA_PRESETS, GATE, planFor, bannerText, goals } from './lib/plan.js';
+import { KANA_PRESETS, GATE, planFor, bannerText, goals, isAuto } from './lib/plan.js';
 import { etDay } from './lib/et.js';
 
-const MAX_W = 8;
-const MIN_W = 0.3;
-const START_AVG_MS = 4000;
 const ROMAJI_KEY = 'hirakata-show-romaji';
+const MODE_KEY = (section) => `hirakata-mode-${section}`;
+const MODES = ['choice', 'typed', 'mix'];
 
-const PRESET_CHARS = {
-  lookalikes: ['れ', 'ね', 'ぬ', 'め', 'わ'],
-  shitsu: ['シ', 'ツ', 'ソ', 'ン'],
+const readMode = (section) => {
+  try {
+    const m = localStorage.getItem(MODE_KEY(section));
+    return MODES.includes(m) ? m : 'mix';
+  } catch {
+    return 'mix';
+  }
 };
-
-function buildPool(script, category) {
-  const scripts = script === 'both' ? ['hiragana', 'katakana'] : [script];
-  const cats = category === 'all' ? ['basic', 'dakuten', 'combo'] : [category];
-  return scripts.flatMap((s) =>
-    cats.flatMap((c) => (s === 'hiragana' ? hiragana : katakana)[c].map((k) => ({ ...k, script: s })))
-  );
-}
-
-// A preset is a bounded subset of the existing kana pool.
-function buildPresetPool(preset) {
-  if (PRESET_CHARS[preset]) {
-    const all = buildPool('both', 'all');
-    return PRESET_CHARS[preset].map((ch) => all.find((k) => k.char === ch)).filter(Boolean);
-  }
-  switch (preset) {
-    case 'hira-all':
-      return buildPool('hiragana', 'all');
-    case 'kata-basic':
-      return buildPool('katakana', 'basic');
-    case 'dakuten':
-      return buildPool('both', 'dakuten');
-    case 'combos':
-      return buildPool('both', 'combo');
-    default:
-      return buildPool('both', 'all');
-  }
-}
-
-function weightedPick(pool, weights, excludeChar) {
-  const candidates = pool.length > 1 ? pool.filter((k) => k.char !== excludeChar) : pool;
-  const total = candidates.reduce((sum, k) => sum + (weights[k.char] ?? 1), 0);
-  let r = Math.random() * total;
-  for (const k of candidates) {
-    r -= weights[k.char] ?? 1;
-    if (r <= 0) return k;
-  }
-  return candidates[candidates.length - 1];
-}
-
-function makeChoices(correct, pool) {
-  const distractors = pool
-    .filter((k) => k.romaji !== correct.romaji)
-    .sort(() => Math.random() - 0.5)
-    .slice(0, 3);
-  return [correct, ...distractors].sort(() => Math.random() - 0.5);
-}
 
 const TabButton = ({ id, tab, setTab, children }) => (
   <button
@@ -85,10 +40,83 @@ function Bar({ frac, done }) {
   );
 }
 
-function Home({ summary, offline, loadError, saveError, onStartKana, onStartSecond, onSave, saving, lastSaved }) {
+function Card({ children, tone = 'purple' }) {
+  const tones = { purple: 'bg-purple-50 border-purple-200 text-purple-900', green: 'bg-green-50 border-green-300 text-green-900' };
+  return <div className={`border rounded-2xl p-4 mb-4 text-sm ${tones[tone]}`}>{children}</div>;
+}
+
+const Btn = ({ onClick, primary, children }) => (
+  <button
+    onClick={onClick}
+    className={`py-2 px-4 rounded-lg font-medium ${primary ? 'bg-purple-600 text-white' : 'bg-white border border-purple-200 text-gray-700'}`}
+  >
+    {children}
+  </button>
+);
+
+// Adaptive prompts: nothing changes without a tap, except the words shrink which is announced
+// with an Undo. Each action is re-checked on the server against the caps in plan.js.
+function AdaptCards({ summary, act }) {
+  const a = summary?.words?.adapt;
+  const k = summary?.kana;
+  const today = etDay();
+  const ev = a?.last_event;
+  return (
+    <>
+      {k && (
+        <div className="bg-white rounded-2xl shadow-xl p-4 mb-4">
+          <div className="text-sm text-gray-500">Kana level</div>
+          <div className="text-lg font-bold text-gray-800">
+            {k.level} of 6 · {k.level_label}
+          </div>
+          <div className="text-sm text-gray-600 mt-1">Next: {k.next}</div>
+          {k.level_up && (
+            <div className="mt-3 flex items-center gap-3">
+              <span className="font-medium text-green-700">Level up? {k.level_up.label}</span>
+              <Btn primary onClick={() => act('level_up')}>Yes</Btn>
+            </div>
+          )}
+        </div>
+      )}
+      {k?.dakuten?.grow.eligible && (
+        <Card tone="green">
+          <div className="font-medium mb-2">Dakuten is going well. Add {k.dakuten.grow.add} more? ({k.dakuten.pool} of {k.dakuten.total} now)</div>
+          <div className="flex gap-2">
+            <Btn primary onClick={() => act('dakuten_grow')}>Yes</Btn>
+            <Btn onClick={() => act('dakuten_snooze')}>Not yet</Btn>
+          </div>
+        </Card>
+      )}
+      {a?.grow.eligible && (
+        <Card tone="green">
+          <div className="font-medium mb-2">Going well. Add {a.grow.add} words?</div>
+          <div className="flex gap-2">
+            <Btn primary onClick={() => act('words_grow')}>Yes</Btn>
+            <Btn onClick={() => act('words_snooze')}>Not yet</Btn>
+          </div>
+        </Card>
+      )}
+      {a?.can_undo && (
+        <Card>
+          <div className="flex items-center justify-between gap-3">
+            <span>Paused {a.resting} words so these can settle. Back soon.</span>
+            <Btn onClick={() => act('words_undo')}>Undo</Btn>
+          </div>
+        </Card>
+      )}
+      {ev?.kind === 'restore' && ev.day === today && (
+        <Card>
+          <span>{ev.n} paused words are back in the mix.</span>
+        </Card>
+      )}
+    </>
+  );
+}
+
+function Home({ summary, offline, loadError, saveError, onStartKana, onStartSecond, onSave, saving, lastSaved, act }) {
   const day = etDay();
   const { entry } = planFor(day);
-  const banner = bannerText(entry);
+  const banner = bannerText(entry, summary?.kana?.auto);
   const job = summary?.job ?? { kana: false, second: false, done: false };
   const streak = summary?.streak ?? 0;
   const today = summary?.today ?? { kana: { correct: 0 }, words: { correct: 0 }, phrases: { correct: 0 } };
@@ -148,11 +176,14 @@ function Home({ summary, offline, loadError, saveError, onStartKana, onStartSeco
         {saveError && <div className="text-sm text-red-600 mt-2">Last save failed (error {saveError}). It will retry.</div>}
       </div>
 
+      <AdaptCards summary={summary} act={act} />
+
       {summary && (
         <div className="bg-white rounded-2xl shadow-xl p-6 mb-4">
-          <div className="text-sm text-gray-500 mb-3">Kana gate (last {GATE.window} answers, need {GATE.accuracy * 100}% and under {GATE.avgMs / 1000}s)</div>
+          <div className="text-sm text-gray-500 mb-3">Kana gate (last {GATE.window} answers, need {GATE.accuracy * 100}% and under {GATE.avgMs / 1000}s; katakana 2.5s)</div>
           <GateBar label="Hiragana" g={summary.gate.hiragana} />
-          <GateBar label="Katakana" g={summary.gate.katakana} />
+          <GateBar label="Katakana" g={summary.gate.katakana} needTyped />
+          {summary.gate.mixed && <GateBar label="Everything mixed (G4)" g={summary.gate.mixed} needTyped />}
         </div>
       )}
 
@@ -167,234 +198,15 @@ function Home({ summary, offline, loadError, saveError, onStartKana, onStartSeco
   );
 }
 
-function Kana({ log, base, preset, setPreset }) {
-  const [script, setScript] = useState('hiragana');
-  const [category, setCategory] = useState('basic');
-  const [mode, setMode] = useState('choice'); // 'choice' | 'typed'
-
-  const pool = useMemo(
-    () => (preset === 'custom' ? buildPool(script, category) : buildPresetPool(preset)),
-    [preset, script, category]
-  );
-  const weights = useRef({});
-  const meta = useRef({}); // char -> {seen, correct, avg_ms}, mirrors what's persisted server-side
-  const avgTime = useRef(START_AVG_MS);
-
-  const [current, setCurrent] = useState(null);
-  const [choices, setChoices] = useState([]);
-  const [typedAnswer, setTypedAnswer] = useState('');
-  const [result, setResult] = useState(null); // null | 'correct' | 'wrong'
-  const questionStart = useRef(0);
-  const [loadedTick, setLoadedTick] = useState(0);
-  const loaded = useRef(false);
-
-  const [stats, setStats] = useState({ answered: 0, correct: 0, streak: 0 });
-
-  // Load persisted per-character weights once; /api/* is absent under plain `vite dev`.
-  useEffect(() => {
-    fetch('/api/stats')
-      .then((r) => (r.ok ? r.json() : null))
-      .then((data) => {
-        if (!data) return;
-        for (const row of Object.values(data)) {
-          weights.current[row.char] = row.weight;
-          meta.current[row.char] = { seen: row.seen, correct: row.correct, avg_ms: row.avg_ms };
-        }
-      })
-      .catch(() => {})
-      .finally(() => {
-        loaded.current = true;
-        setLoadedTick((t) => t + 1);
-      });
-  }, []);
-
-  const nextQuestion = (excludeChar) => {
-    const next = weightedPick(pool, weights.current, excludeChar);
-    setCurrent(next);
-    setChoices(mode === 'choice' ? makeChoices(next, pool) : []);
-    setTypedAnswer('');
-    setResult(null);
-    questionStart.current = Date.now();
-  };
-
-  // Fresh question + session whenever the pool or mode changes. Per-character weights are
-  // not reset - they're a property of the character, not the current view.
-  useEffect(() => {
-    if (!loaded.current) return;
-    avgTime.current = START_AVG_MS;
-    setStats({ answered: 0, correct: 0, streak: 0 });
-    log.begin(`kana:${mode}`, preset === 'custom' ? `custom:${script}/${category}` : preset);
-    nextQuestion(null);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pool, mode, loadedTick]);
-
-  const grade = (isCorrect) => {
-    const elapsed = Date.now() - questionStart.current;
-    const w = weights.current[current.char] ?? 1;
-    let newWeight;
-    if (isCorrect) {
-      const fast = elapsed < avgTime.current * 0.8;
-      const slow = elapsed > avgTime.current * 1.3;
-      newWeight = fast ? Math.max(w * 0.6, MIN_W) : slow ? Math.min(w * 1.3, MAX_W) : w;
-      avgTime.current = avgTime.current * 0.9 + elapsed * 0.1;
-    } else {
-      newWeight = Math.min(w * 2, MAX_W);
-    }
-    weights.current[current.char] = newWeight;
-
-    const prev = meta.current[current.char] ?? { seen: 0, correct: 0, avg_ms: null };
-    const newMeta = {
-      seen: prev.seen + 1,
-      correct: prev.correct + (isCorrect ? 1 : 0),
-      avg_ms: Math.round(prev.avg_ms == null ? elapsed : prev.avg_ms * 0.7 + elapsed * 0.3),
-    };
-    meta.current[current.char] = newMeta;
-    fetch('/api/stats', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      keepalive: true,
-      body: JSON.stringify({
-        script: current.script,
-        char: current.char,
-        weight: newWeight,
-        ...newMeta,
-        ms: elapsed,
-        isCorrect,
-      }),
-    }).catch(() => {}); // best-effort; dev mode without functions just won't persist
-
-    log.record(isCorrect, elapsed);
-    setStats((s) => ({
-      answered: s.answered + 1,
-      correct: s.correct + (isCorrect ? 1 : 0),
-      streak: isCorrect ? s.streak + 1 : 0,
-    }));
-    setResult(isCorrect ? 'correct' : 'wrong');
-  };
-
-  const submitChoice = (romaji) => {
-    if (result) return;
-    grade(romaji === current.romaji);
-  };
-
-  const submitTyped = (e) => {
-    e.preventDefault();
-    if (result) return;
-    grade(typedAnswer.trim().toLowerCase() === current.romaji);
-  };
-
-  if (!current) return null;
-
-  return (
-    <div>
-      <div className="bg-white rounded-2xl shadow-xl p-4 mb-4 flex flex-wrap gap-3 items-center justify-center">
-        <select
-          value={preset}
-          onChange={(e) => setPreset(e.target.value)}
-          className="p-3 border border-gray-300 rounded-lg"
-        >
-          <option value="custom">Custom</option>
-          {Object.entries(KANA_PRESETS).map(([id, label]) => (
-            <option key={id} value={id}>
-              {label}
-            </option>
-          ))}
-        </select>
-        {preset === 'custom' && (
-          <>
-            <select value={script} onChange={(e) => setScript(e.target.value)} className="p-3 border border-gray-300 rounded-lg">
-              <option value="hiragana">Hiragana</option>
-              <option value="katakana">Katakana</option>
-              <option value="both">Both</option>
-            </select>
-            <select value={category} onChange={(e) => setCategory(e.target.value)} className="p-3 border border-gray-300 rounded-lg">
-              <option value="basic">Basic</option>
-              <option value="dakuten">Dakuten</option>
-              <option value="combo">Combinations</option>
-              <option value="all">All</option>
-            </select>
-          </>
-        )}
-        <div className="flex gap-2">
-          <button
-            onClick={() => setMode('choice')}
-            className={`py-3 px-3 rounded-lg text-sm font-medium ${mode === 'choice' ? 'bg-purple-600 text-white' : 'bg-gray-200 text-gray-700'}`}
-          >
-            Multiple choice
-          </button>
-          <button
-            onClick={() => setMode('typed')}
-            className={`py-3 px-3 rounded-lg text-sm font-medium ${mode === 'typed' ? 'bg-purple-600 text-white' : 'bg-gray-200 text-gray-700'}`}
-          >
-            Type it
-          </button>
-        </div>
-      </div>
-
-      <div className="bg-white rounded-2xl shadow-xl p-8 text-center">
-        <TodayProgress log={log} type="kana" base={base} goal={goals(planFor(etDay()).entry).kana} />
-        <div className="text-sm text-gray-500 mb-2">
-          {stats.correct}/{stats.answered} correct · streak {stats.streak}
-        </div>
-        <div className="text-8xl font-bold text-gray-800 mb-8">{current.char}</div>
-
-        {mode === 'choice' ? (
-          <div className="grid grid-cols-2 gap-3">
-            {choices.map((c) => {
-              const isChosenWrong = result && c.romaji !== current.romaji && result === 'wrong';
-              const isAnswer = result && c.romaji === current.romaji;
-              return (
-                <button
-                  key={c.romaji}
-                  onClick={() => submitChoice(c.romaji)}
-                  disabled={!!result}
-                  className={`min-h-[64px] py-4 rounded-lg text-lg font-medium border-2 ${
-                    isAnswer
-                      ? 'bg-green-100 border-green-500 text-green-800'
-                      : isChosenWrong
-                      ? 'bg-red-50 border-red-200 text-red-700'
-                      : 'border-gray-200'
-                  }`}
-                >
-                  {c.romaji}
-                </button>
-              );
-            })}
-          </div>
-        ) : (
-          <form onSubmit={submitTyped} className="flex gap-3 justify-center">
-            <input
-              autoFocus
-              value={typedAnswer}
-              onChange={(e) => setTypedAnswer(e.target.value)}
-              disabled={!!result}
-              className={`p-3 border-2 rounded-lg text-lg text-center w-40 ${
-                result === 'correct' ? 'border-green-500 bg-green-50' : result === 'wrong' ? 'border-red-500 bg-red-50' : 'border-gray-300'
-              }`}
-              placeholder="romaji"
-            />
-            {!result && (
-              <button type="submit" className="py-3 px-6 bg-purple-600 text-white font-bold rounded-lg">
-                Check
-              </button>
-            )}
-          </form>
-        )}
-
-        {result && (
-          <div className="mt-6">
-            {result === 'wrong' && <div className="text-red-600 font-medium mb-3">Correct answer: {current.romaji}</div>}
-          </div>
-        )}
-      </div>
-      <NextBar enabled={!!result} onNext={() => result && nextQuestion(current.char)} />
-    </div>
-  );
-}
-
 export default function App() {
   const [tab, setTab] = useState('home'); // 'home' | 'kana' | 'phrases'
-  const [preset, setPreset] = useState('custom');
+  const [preset, setPresetState] = useState('custom');
+  const [autoBg, setAutoBg] = useState(false); // app-picked job: lower levels stay in the mix at low weight
+  const [modes, setModes] = useState(() => ({ kana: readMode('kana'), words: readMode('words') }));
+  const setPreset = (p) => {
+    setAutoBg(false);
+    setPresetState(p);
+  };
   const [summary, setSummary] = useState(null);
   const [offline, setOffline] = useState(false);
   const [loadError, setLoadError] = useState(null);
@@ -455,12 +267,41 @@ export default function App() {
     }).catch(() => {});
   };
 
+  // Choose / Type / Mix, remembered per section (D1 copy wins over localStorage, like romaji).
+  const setMode = (section) => (mode) => {
+    setModes((m) => ({ ...m, [section]: mode }));
+    try {
+      localStorage.setItem(MODE_KEY(section), mode);
+    } catch {
+      // storage unavailable
+    }
+    fetch('/api/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key: `mode_${section}`, value: mode }),
+    }).catch(() => {});
+  };
+
+  // Adaptive card taps (grow / snooze / undo / level up), then refresh what Home shows.
+  const act = (action) =>
+    fetch('/api/adapt', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action }),
+    })
+      .catch(() => {})
+      .finally(loadSummary);
+
   // Romaji setting: D1 copy wins over localStorage when available.
   useEffect(() => {
     fetch('/api/settings')
       .then((r) => (r.ok ? r.json() : null))
       .then((s) => {
         if (s?.romaji != null) setShowRomajiState(s.romaji !== '0');
+        setModes((m) => ({
+          kana: MODES.includes(s?.mode_kana) ? s.mode_kana : m.kana,
+          words: MODES.includes(s?.mode_words) ? s.mode_words : m.words,
+        }));
       })
       .catch(() => {});
   }, []);
@@ -469,7 +310,13 @@ export default function App() {
   // so today's job lines check off as they are met across separate sittings.
   useEffect(() => {
     if (tab !== 'home' && tab !== 'stats') return;
-    const refresh = () => log.flush().finally(loadSummary);
+    // Session end: save, let the server run its once-a-day grow/shrink check, then redraw Home.
+    const refresh = () =>
+      log
+        .flush()
+        .then(() => fetch('/api/adapt', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'eval' }) }))
+        .catch(() => {})
+        .finally(loadSummary);
     refresh();
     const onVisible = () => document.visibilityState === 'visible' && refresh();
     document.addEventListener('visibilitychange', onVisible);
@@ -480,14 +327,24 @@ export default function App() {
   // Every screen change saves the open session first.
   const go = (next) => {
     log.flush();
+    // Open the keyboard inside this tap when the section can ask typed questions (iOS needs a gesture).
+    if ((next === 'kana' && modes.kana !== 'choice') || (next === 'words' && modes.words !== 'choice')) primeKeyboard();
     setTab(next);
   };
 
+  // Today's kana job: the app's pick from his weakest level, unless plan.js names a preset.
   const startKana = () => {
-    const p = planFor(etDay()).entry.kana.preset;
-    setPreset(KANA_PRESETS[p] ? p : 'custom');
+    const entry = planFor(etDay()).entry;
+    if (isAuto(entry) && summary?.kana?.auto) {
+      setPresetState(summary.kana.auto.preset);
+      setAutoBg(true);
+    } else {
+      setPresetState(KANA_PRESETS[entry.kana.preset] ? entry.kana.preset : 'custom');
+      setAutoBg(false);
+    }
     go('kana');
   };
+  const goTab = (id) => (id === 'kana' ? startKana() : go(id));
 
   const saveNow = async () => {
     setSaving(true);
@@ -502,6 +359,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-purple-50 to-pink-100 p-4 sm:p-8 pb-[calc(11rem+env(safe-area-inset-bottom))]">
+      <KeyboardAnchor />
       <div className="max-w-2xl mx-auto">
         <div className="flex items-center justify-center gap-3 mb-4">
           <h1 className="text-4xl font-bold text-purple-700">HiraKata</h1>
@@ -513,14 +371,14 @@ export default function App() {
         </div>
 
         <div className="flex gap-2 mb-4">
-          <TabButton id="home" tab={tab} setTab={go}>Home</TabButton>
-          <TabButton id="kana" tab={tab} setTab={go}>Kana</TabButton>
+          <TabButton id="home" tab={tab} setTab={goTab}>Home</TabButton>
+          <TabButton id="kana" tab={tab} setTab={goTab}>Kana</TabButton>
           {PLAN.phrasesOn ? (
-            <TabButton id="phrases" tab={tab} setTab={go}>Phrases</TabButton>
+            <TabButton id="phrases" tab={tab} setTab={goTab}>Phrases</TabButton>
           ) : (
-            <TabButton id="words" tab={tab} setTab={go}>Words</TabButton>
+            <TabButton id="words" tab={tab} setTab={goTab}>Words</TabButton>
           )}
-          <TabButton id="stats" tab={tab} setTab={go}>Stats</TabButton>
+          <TabButton id="stats" tab={tab} setTab={goTab}>Stats</TabButton>
         </div>
 
         {tab === 'home' && (
@@ -534,9 +392,23 @@ export default function App() {
             onSave={saveNow}
             saving={saving}
             lastSaved={lastSaved}
+            act={act}
           />
         )}
-        {tab === 'kana' && <Kana log={log} base={baseFor('kana')} preset={preset} setPreset={setPreset} />}
+        {tab === 'kana' && (
+          <Kana
+            log={log}
+            base={baseFor('kana')}
+            preset={preset}
+            setPreset={setPreset}
+            autoBg={autoBg}
+            level={summary?.kana?.level ?? 4}
+            dakutenK={summary?.kana?.dakuten?.pool ?? 50}
+            mode={modes.kana}
+            setMode={setMode('kana')}
+            onHome={() => go('home')}
+          />
+        )}
         {tab === 'words' && !PLAN.phrasesOn && (
           <Words
             log={log}
@@ -544,6 +416,9 @@ export default function App() {
             showRomaji={showRomaji}
             setShowRomaji={setShowRomaji}
             suggestRomajiOff={suggestRomajiOff}
+            mode={modes.words}
+            setMode={setMode('words')}
+            onHome={() => go('home')}
           />
         )}
         {tab === 'stats' && <Stats summary={summary} />}
