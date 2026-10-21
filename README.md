@@ -4,7 +4,7 @@
   <img src="images/logo.png" alt="HiraKata logo, a deer in a graduation cap holding a sign" width="220">
 </p>
 
-A hiragana, katakana and trip phrases practice app I built with Claude Code while learning Japanese.
+A Japanese language learning app I use to practice hiragana and katakana, built with Claude Code.
 
 <p align="center">
   <img src="images/home.png" alt="HiraKata home screen" width="30%">
@@ -24,8 +24,9 @@ Initially I tried using Anki. It's a great tool that a lot of people vouch for, 
 - Uses a feature similar to Anki that assigns a weight to each kana based on the speed of my answer in addition to incorrect answers, so slow or missed kana come up more often.
 
 <p align="center">
-  <img src="images/kana-quiz.png" alt="Kana quiz" width="30%">
-  <img src="images/phrases.png" alt="Phrases quiz" width="30%">
+  <img src="images/kana.png" alt="Kana quiz" width="30%">
+  <img src="images/words.png" alt="Words quiz" width="30%">
+  <img src="images/stats.png" alt="Stats page" width="30%">
 </p>
 
 ## Tech stack
