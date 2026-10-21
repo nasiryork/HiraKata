@@ -28,8 +28,6 @@ Initially I tried using Anki. It's a great tool that a lot of people vouch for, 
   <img src="images/phrases.png" alt="Phrases quiz" width="30%">
 </p>
 
-The screenshots use sample data.
-
 ## Tech stack
 
 - Frontend: React, Vite, Tailwind CSS
