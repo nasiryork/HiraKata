@@ -98,8 +98,12 @@ export default function Words({ log, base, showRomaji, setShowRomaji, suggestRom
     setTyped('');
     setPicked(null);
     questionStart.current = Date.now();
-    if (isTyped) inputRef.current?.focus({ preventScroll: true });
-    else dropKeyboard();
+    if (isTyped) {
+      // The input is still read-only from the last answer; iOS skips the keyboard for a read-only
+      // focus() and then waits seconds. Unlock it now, inside the tap, before focusing.
+      if (inputRef.current) inputRef.current.readOnly = false;
+      inputRef.current?.focus({ preventScroll: true });
+    } else dropKeyboard();
   };
 
   // New logged session whenever the mode changes (and once saved weights have loaded).

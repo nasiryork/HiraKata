@@ -84,8 +84,12 @@ export default function Kana({ log, base, sel, setSel, mode, setMode, onHome }) 
     setResult(null);
     setPicked(null);
     questionStart.current = Date.now();
-    if (typed) inputRef.current?.focus({ preventScroll: true });
-    else dropKeyboard();
+    if (typed) {
+      // The input is still read-only from the last answer; iOS skips the keyboard for a read-only
+      // focus() and then waits seconds. Unlock it now, inside the tap, before focusing.
+      if (inputRef.current) inputRef.current.readOnly = false;
+      inputRef.current?.focus({ preventScroll: true });
+    } else dropKeyboard();
   };
 
   // Fresh question + session whenever the pool or mode changes. Per-character weights are
