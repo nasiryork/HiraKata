@@ -17,6 +17,15 @@ export const KEYBOARD_ANCHOR_ID = 'kb-anchor';
 export const primeKeyboard = () => document.getElementById(KEYBOARD_ANCHOR_ID)?.focus({ preventScroll: true });
 export const dropKeyboard = () => document.activeElement?.blur?.();
 
+// iOS can leave the input as document.activeElement with no keyboard showing; tapping it then does
+// nothing because it is already focused. If that is the state, blur and refocus inside the tap.
+const keyboardIsUp = () => window.innerHeight - (window.visualViewport?.height ?? window.innerHeight) > 120;
+const ensureKeyboard = (input) => {
+  if (!input) return;
+  if (document.activeElement === input && !keyboardIsUp()) input.blur();
+  input.focus({ preventScroll: true });
+};
+
 export function KeyboardAnchor() {
   return (
     <input
@@ -78,7 +87,7 @@ export default function TypedShell({ active, inputRef, value, onChange, answered
       <div className="shrink-0 px-3 pt-3 max-w-2xl w-full mx-auto">{active && header}</div>
       <div
         className="flex-1 min-h-0 overflow-y-auto px-4 py-2 flex flex-col items-center justify-center text-center"
-        onPointerDown={() => inputRef.current?.focus({ preventScroll: true })}
+        onClick={() => ensureKeyboard(inputRef.current)}
       >
         {active && children}
         {active && answered && feedback}
@@ -91,6 +100,10 @@ export default function TypedShell({ active, inputRef, value, onChange, answered
           readOnly={answered}
           tabIndex={active ? 0 : -1}
           onChange={(e) => onChange(e.target.value)}
+          onClick={(e) => {
+            e.stopPropagation();
+            ensureKeyboard(e.currentTarget);
+          }}
           onKeyDown={(e) => {
             if (e.key !== 'Enter' || e.nativeEvent.isComposing) return;
             e.preventDefault();
